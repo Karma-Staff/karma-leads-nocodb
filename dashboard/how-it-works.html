@@ -1,0 +1,1445 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Karma Leads — how it works</title>
+<style>
+  :root{
+    --bg:#f7f7f4; --surface:#fff; --surface-2:#f2f2ee; --border:#e4e3de;
+    --ink:#1b1b19; --ink-2:#5d5c56; --ink-3:#8f8e87;
+    --accent:#2f54eb; --accent-ink:#2545c8; --accent-soft:#e8edfd;
+    /* categorical slots, validated for colour-blind separation and contrast
+       against this page's own surfaces — same three the app's KPI row uses */
+    --cat-1:#2a78d6; --cat-2:#eb6834; --cat-3:#1baf7a;
+    --warn:#8a5a00; --warn-bg:#fff4e0; --warn-br:#f0d9a8;
+    --danger:#a3231c; --danger-bg:#fdeceb; --danger-br:#f3c9c6;
+    --ok:#14663f; --ok-bg:#e3f6ec; --ok-br:#b9e5cd;
+    --mono:"Cascadia Mono",Consolas,"SF Mono",Menlo,monospace;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#141517; --surface:#1d1f22; --surface-2:#26282c; --border:#33363b;
+      --ink:#ececea; --ink-2:#a9a8a2; --ink-3:#7c7b76;
+      --accent:#6d8dff; --accent-ink:#9db1ff; --accent-soft:#22305c;
+      /* the same three hues re-stepped for the dark surface, not flipped */
+      --cat-1:#3987e5; --cat-2:#d95926; --cat-3:#199e70;
+      --warn:#e8bf72; --warn-bg:#3a2f16; --warn-br:#5b4a22;
+      --danger:#ef9a95; --danger-bg:#3d1f1d; --danger-br:#63302c;
+      --ok:#7fe0ad; --ok-bg:#17402c; --ok-br:#245c40;
+    }
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    font:16px/1.65 "Segoe UI",system-ui,-apple-system,sans-serif;
+    background:var(--bg); color:var(--ink);
+    display:grid; grid-template-columns:250px minmax(0,1fr);
+    max-width:1240px; margin:0 auto; gap:36px; padding:0 24px;
+  }
+  /* ---- table of contents ---- */
+  nav{position:sticky; top:0; align-self:start; max-height:100vh; overflow-y:auto; padding:28px 0}
+  nav .brand{font-weight:800; font-size:17px; margin-bottom:4px}
+  nav .brand span{
+    display:inline-grid; place-items:center; width:24px; height:24px; border-radius:7px;
+    background:var(--accent); color:#fff; font-size:14px; margin-right:6px; vertical-align:-5px;
+  }
+  nav .tag{color:var(--ink-3); font-size:12.5px; margin-bottom:18px}
+  nav a{
+    display:block; padding:5px 10px; color:var(--ink-2); text-decoration:none;
+    font-size:13.5px; border-left:2px solid transparent; border-radius:0 6px 6px 0;
+  }
+  nav a:hover{background:var(--surface-2); color:var(--ink); border-left-color:var(--accent)}
+  nav .sub{padding-left:22px; font-size:13px}
+  main{padding:30px 0 90px; min-width:0}
+  h1{font-size:31px; line-height:1.25; letter-spacing:-.02em}
+  h2{
+    font-size:22px; margin:46px 0 14px; padding-top:18px;
+    border-top:1px solid var(--border); letter-spacing:-.01em;
+  }
+  h3{font-size:16.5px; margin:26px 0 9px}
+  p,ul,ol{margin-bottom:13px}
+  ul,ol{padding-left:22px}
+  li{margin-bottom:5px}
+  .lede{font-size:17.5px; color:var(--ink-2); margin:12px 0 8px}
+  code{
+    font-family:var(--mono); font-size:.87em; background:var(--surface-2);
+    border:1px solid var(--border); border-radius:5px; padding:1px 5px;
+  }
+  pre{
+    background:var(--surface); border:1px solid var(--border); border-radius:10px;
+    padding:14px 16px; overflow-x:auto; margin-bottom:14px;
+  }
+  pre code{background:none; border:none; padding:0; font-size:13px; line-height:1.6}
+  .cmt{color:var(--ink-3)}
+  .kw{color:var(--accent-ink); font-weight:600}
+  table{
+    width:100%; border-collapse:collapse; margin-bottom:16px; font-size:14.5px;
+    background:var(--surface); border:1px solid var(--border); border-radius:10px;
+    overflow:hidden;
+  }
+  th,td{text-align:left; padding:9px 12px; border-bottom:1px solid var(--border); vertical-align:top}
+  th{background:var(--surface-2); font-size:12.5px; text-transform:uppercase;
+     letter-spacing:.04em; color:var(--ink-3)}
+  tr:last-child td{border-bottom:none}
+  td code{white-space:nowrap}
+  .num{text-align:right; font-variant-numeric:tabular-nums}
+  .note,.warn,.danger,.ok{
+    border:1px solid var(--border); border-left-width:4px; border-radius:8px;
+    padding:12px 15px; margin:16px 0; font-size:14.5px; background:var(--surface);
+  }
+  .note{border-left-color:var(--accent)}
+  .warn{background:var(--warn-bg); border-color:var(--warn-br); border-left-color:var(--warn); color:var(--warn)}
+  .danger{background:var(--danger-bg); border-color:var(--danger-br); border-left-color:var(--danger); color:var(--danger)}
+  .ok{background:var(--ok-bg); border-color:var(--ok-br); border-left-color:var(--ok); color:var(--ok)}
+  .warn strong,.danger strong,.ok strong{color:inherit}
+  /* ---- diagram ---- */
+  .diagram{
+    background:var(--surface); border:1px solid var(--border); border-radius:12px;
+    padding:20px; margin:18px 0; overflow-x:auto;
+  }
+  .box{
+    border:1px solid var(--border); border-radius:9px; padding:11px 13px;
+    background:var(--surface-2); font-size:13.5px;
+  }
+  .box b{display:block; font-size:14px; margin-bottom:2px}
+  .box .p,td .p{color:var(--ink-3); font-family:var(--mono); font-size:11.5px}
+  td .p{display:block; font-family:inherit; font-size:12px; font-style:italic}
+  .box.hi{border-color:var(--accent); background:var(--accent-soft)}
+  .row{display:flex; align-items:center; gap:12px; flex-wrap:wrap}
+  .row>.box{flex:1; min-width:180px}
+  .arrow{color:var(--ink-3); font-size:19px; flex-shrink:0}
+  .down{text-align:center; color:var(--ink-3); font-size:19px; line-height:1; margin:8px 0}
+  .grid2{display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:12px}
+  /* ---- charts ---- */
+  .chart{
+    background:var(--surface); border:1px solid var(--border); border-radius:12px;
+    padding:17px 20px; margin:18px 0;
+  }
+  .chart h4{
+    font-size:12px; text-transform:uppercase; letter-spacing:.05em;
+    color:var(--ink-3); margin-bottom:13px;
+  }
+  .bar-row{
+    display:grid; grid-template-columns:118px minmax(0,1fr) 116px;
+    align-items:center; gap:12px; margin-bottom:9px; font-size:13.5px;
+  }
+  .bar-row:last-child{margin-bottom:0}
+  /* track is a lighter step of the fill's own hue, so state reads across the bar */
+  .bar-track{height:9px; border-radius:5px; background:var(--accent-soft); overflow:hidden}
+  .bar-fill{display:block; height:100%; border-radius:5px; background:var(--accent)}
+  .bar-val{text-align:right; color:var(--ink-3); font-variant-numeric:tabular-nums; font-size:12.5px}
+  .bar-val b{color:var(--ink); font-variant-numeric:tabular-nums}
+  /* composition: 2px surface gaps keep adjacent fills legible */
+  .compo{
+    display:flex; gap:2px; height:9px; border-radius:5px;
+    overflow:hidden; background:var(--surface); margin-bottom:11px;
+  }
+  .compo>span{display:block; height:100%; border-radius:5px; min-width:3px}
+  .legend{display:flex; flex-wrap:wrap; gap:16px; font-size:13px; color:var(--ink-2)}
+  .legend i{display:inline-block; width:9px; height:9px; border-radius:3px; margin-right:6px}
+  @media (max-width:560px){
+    .bar-row{grid-template-columns:92px minmax(0,1fr); }
+    .bar-row .bar-val{grid-column:2; text-align:left}
+  }
+  .steps{counter-reset:s; list-style:none; padding-left:0}
+  .steps>li{
+    counter-increment:s; position:relative; padding-left:38px; margin-bottom:14px;
+  }
+  .steps>li::before{
+    content:counter(s); position:absolute; left:0; top:1px;
+    width:25px; height:25px; border-radius:50%; background:var(--accent); color:#fff;
+    display:grid; place-items:center; font-size:13px; font-weight:700;
+  }
+  .pill{
+    display:inline-block; font-size:11.5px; font-weight:700; padding:2px 8px;
+    border-radius:99px; background:var(--accent-soft); color:var(--accent-ink);
+    vertical-align:1px; margin-left:6px;
+  }
+  .file{font-family:var(--mono); font-size:13px; color:var(--accent-ink)}
+  footer{margin-top:50px; padding-top:18px; border-top:1px solid var(--border);
+         color:var(--ink-3); font-size:13px}
+  /* ---- timeline ---- */
+  .tl{list-style:none; padding:0; margin:18px 0 0; position:relative}
+  .tl::before{
+    content:""; position:absolute; left:7px; top:6px; bottom:6px;
+    width:2px; background:var(--border);
+  }
+  .tl>li{position:relative; padding:0 0 20px 30px}
+  .tl>li::before{
+    content:""; position:absolute; left:2px; top:5px; width:12px; height:12px;
+    border-radius:50%; background:var(--surface); border:2px solid var(--accent);
+  }
+  .tl>li.minor::before{border-color:var(--ink-3)}
+  .tl .when{
+    font-family:var(--mono); font-size:12px; color:var(--ink-3);
+    letter-spacing:-.02em;
+  }
+  .tl .what{font-weight:700; margin:1px 0 3px}
+  .tl .why{color:var(--ink-2); font-size:14px}
+  .tl .tag{
+    display:inline-block; font-size:10.5px; font-weight:700; letter-spacing:.06em;
+    text-transform:uppercase; padding:1px 7px; border-radius:4px; margin-left:7px;
+    background:var(--surface-2); color:var(--ink-3); vertical-align:2px;
+  }
+  .tl .tag.now{background:var(--accent-soft); color:var(--accent-ink)}
+  /* ---- build guide ---- */
+  .phase{
+    border:1px solid var(--border); border-left:3px solid var(--accent);
+    border-radius:0 8px 8px 0; padding:15px 18px; margin:16px 0;
+    background:var(--surface);
+  }
+  .phase h3{margin:0 0 8px; font-size:16px}
+  .phase .took{
+    font-size:12.5px; color:var(--ink-3); font-style:italic;
+    border-top:1px dashed var(--border); margin-top:11px; padding-top:9px;
+  }
+  .phase .took b{color:var(--ink-2); font-style:normal}
+  @media (max-width:900px){
+    body{grid-template-columns:1fr; gap:0}
+    nav{position:static; max-height:none; padding:22px 0 0}
+    nav a{display:inline-block; border-left:none; border-radius:6px}
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="brand"><span>K</span>Karma Leads</div>
+  <div class="tag">How the code works</div>
+  <a href="#big-picture">The big picture</a>
+  <a href="#where">Where everything lives</a>
+  <a href="#model">The data model</a>
+  <a href="#frontend">The front end</a>
+  <a href="#frontend-boot" class="sub">Booting &amp; discovery</a>
+  <a href="#frontend-stats" class="sub">The KPI row</a>
+  <a href="#frontend-list" class="sub">Listing, paging, sorting</a>
+  <a href="#frontend-segment" class="sub">The segment view</a>
+  <a href="#frontend-detail" class="sub">The reading pane</a>
+  <a href="#import">Getting data in</a>
+  <a href="#import-rebuild" class="sub">Path A: full rebuild</a>
+  <a href="#import-drop" class="sub">Path B: drop zone</a>
+  <a href="#import-jobs" class="sub">Path C: job search</a>
+  <a href="#algorithms">The five algorithms</a>
+  <a href="#nocodb">NocoDB's sharp edges</a>
+  <a href="#changing">Changing things safely</a>
+  <a href="#build">Building one of these</a>
+  <a href="#build-profile" class="sub">1 · Profile the data</a>
+  <a href="#build-schema" class="sub">2 · Let it pick the schema</a>
+  <a href="#build-identity" class="sub">3 · Identity &amp; dedupe</a>
+  <a href="#build-store" class="sub">4 · Storage &amp; serving</a>
+  <a href="#build-pipeline" class="sub">5 · The pipeline</a>
+  <a href="#build-ui" class="sub">6 · The interface</a>
+  <a href="#build-enrich" class="sub">7 · Paid enrichment</a>
+  <a href="#build-ops" class="sub">8 · Operations</a>
+  <a href="#timeline">Timeline</a>
+  <a href="#files">File map</a>
+</nav>
+
+<main>
+
+<h1>Karma Leads: how it works</h1>
+<p class="lede">
+  A tour of the machinery behind the leads dashboard — what runs where, how a lead
+  gets from a spreadsheet or a LinkedIn search into the app, and which parts will
+  bite you if you change them carelessly.
+</p>
+<p>
+  Companion documents: <span class="file">dashboard/README.md</span> for using the
+  dashboard, <span class="file">CLAUDE.md</span> for the short version aimed at
+  Claude Code.
+</p>
+
+<!-- ============================================================ -->
+<h2 id="big-picture">The big picture</h2>
+
+<p>
+  Three moving parts, all on one Windows machine. Nothing is hosted anywhere; the
+  whole system is a Node process listening on port 8080 with a SQLite file next to it.
+</p>
+
+<div class="diagram">
+  <div class="row">
+    <div class="box"><b>Sources</b>
+      <div class="p">spreadsheets · LinkedIn via Apify</div>
+    </div>
+    <span class="arrow">→</span>
+    <div class="box hi"><b>NocoDB + Express</b>
+      <div class="p">node index.js · :8080 · noco.db</div>
+    </div>
+    <span class="arrow">→</span>
+    <div class="box"><b>The app</b>
+      <div class="p">/app — vanilla HTML/CSS/JS</div>
+    </div>
+  </div>
+  <div class="down">▲ three ways in ▲</div>
+  <div class="grid2">
+    <div class="box"><b>Path A — full rebuild</b>
+      <div class="p">python dashboard/setup_v2.py</div>
+      Destructive. Wipes and recreates everything from the files.
+    </div>
+    <div class="box"><b>Path B — drop zone</b>
+      <div class="p">POST /app-api/import → import-leads.js</div>
+      Additive. Drag a file onto the app; nobody's work is touched.
+    </div>
+    <div class="box"><b>Path C — job search</b>
+      <div class="p">POST /app-api/job-search → job-search.js</div>
+      Additive, and the only path that costs money. Queries LinkedIn
+      through Apify and appends to the job board.
+    </div>
+  </div>
+</div>
+
+<p>
+  NocoDB supplies the database, the REST API, authentication and an admin UI.
+  Everything the team touches day to day is the custom front end at
+  <code>/app</code>, which is <em>only</em> an API client — it has no server of its
+  own and stores nothing except a JWT and a few preferences in
+  <code>localStorage</code>.
+</p>
+
+<div class="note">
+  <strong>Why a custom front end at all?</strong> NocoDB's grid is a spreadsheet, and
+  the whole point of this project was to stop looking at spreadsheets. The app is an
+  email-style three-pane reader: list on the left, one lead open on the right, notes
+  underneath.
+</div>
+
+<h3>The server, in full</h3>
+<p>
+  <span class="file">index.js</span> is ~110 lines and does exactly three things:
+  serve the front end, register our own <code>/app-api</code> routes, then hand
+  everything else to NocoDB.
+</p>
+<pre><code><span class="cmt">// static front end, with revalidation so a stale app.js can't half-load</span>
+app.use("/app", express.static(path.join(__dirname, "public"), {
+  etag: true,
+  setHeaders: (res) =&gt; res.setHeader("Cache-Control", "no-cache"),
+}));
+
+<span class="cmt">// our own routes — ALL must come before Noco.init or they never see a request</span>
+app.post("/app-api/import",     express.raw({ type: "*/*", limit: "80mb" }), …);
+app.post("/app-api/job-search", express.json({ limit: "64kb" }), …);
+app.get ("/app-api/apify-usage", …);              <span class="cmt">// credits for the ⚙ panel</span>
+app.get/post/delete("/app-api/recents", …);       <span class="cmt">// the Recent trail</span>
+
+app.use(await Noco.init({}, httpServer, app));   <span class="cmt">// 3-arg form; Noco.init({}) crashes</span></code></pre>
+
+<div class="warn">
+  <strong>Order matters.</strong> <code>Noco.init</code> installs a catch-all router.
+  Any route registered after it is unreachable — you'll get NocoDB's 404 instead of
+  your handler.
+</div>
+
+<p>
+  Every <code>/app-api</code> route requires the caller's own <code>xc-auth</code>
+  JWT and acts as that user, so NocoDB's permissions still apply to anything these
+  routes write. The routes exist for the three jobs the REST API can't do: parsing a
+  spreadsheet, holding a secret, and keeping a per-person activity trail.
+</p>
+
+<!-- ============================================================ -->
+<h2 id="where">Where everything lives</h2>
+
+<p>
+  There are two folders and they are not the same thing. Confusing them is the single
+  most common way to waste an hour here.
+</p>
+
+<table>
+  <tr><th>Folder</th><th>What it holds</th><th>Editing it…</th></tr>
+  <tr>
+    <td><span class="file">…\GitHub\KarmaLeads\</span><br><span class="p">the repo</span></td>
+    <td>Source spreadsheets, the Python rebuild scripts, all documentation</td>
+    <td>…changes what a <em>rebuild</em> produces. No effect on the running app.</td>
+  </tr>
+  <tr>
+    <td><span class="file">C:\Users\David\karma-leads-nocodb\</span><br><span class="p">the app</span></td>
+    <td>The Node server, <code>public/</code> front end, <code>import-leads.js</code>, and <code>noco.db</code></td>
+    <td>…changes the live dashboard immediately (front end) or after a restart (server).</td>
+  </tr>
+</table>
+
+<p>
+  The app folder sits outside OneDrive deliberately: <code>noco.db</code> is a live
+  SQLite file, and cloud-syncing a database that's being written to is a good way to
+  corrupt it.
+</p>
+
+<!-- ============================================================ -->
+<h2 id="model">The data model</h2>
+
+<p>
+  One NocoDB base, <b>Karma Leads</b>, with five tables. The split into
+  companies-versus-people is the core design decision: a lead you call by company
+  name and a lead you call by a person's name need different fields and different
+  handling.
+</p>
+
+<table>
+  <tr><th>Table</th><th class="num">Rows</th><th>Primary value</th><th>Links</th></tr>
+  <tr><td><b>Companies</b></td><td class="num">32,913</td><td><code>Company</code></td>
+      <td><code>People here</code>, <code>Job postings</code>, <code>Similar companies</code></td></tr>
+  <tr><td><b>People</b></td><td class="num">2,328</td><td><code>Name</code></td>
+      <td><code>Company record</code></td></tr>
+  <tr><td><b>Job Board</b></td><td class="num">85</td><td><code>Job Title</code></td>
+      <td><code>Company record</code></td></tr>
+  <tr><td><b>Segments</b></td><td class="num">202</td><td><code>Segment</code></td>
+      <td><code>Companies</code></td></tr>
+  <tr><td><b>Blocklist</b></td><td class="num">—</td><td><code>Phone</code></td><td>—</td></tr>
+</table>
+
+<h3>How "similar companies" works</h3>
+<p>
+  There is no similarity algorithm. A <b>Segment</b> is just a Category × State
+  bucket — stored as <em>Restoration · FL</em>, shown as
+  <em>Restoration · Florida</em> — and every
+  company is linked to exactly one. Opening a company and clicking through to its
+  segment gives you every other company in the same trade and state. Cheap, obvious,
+  and it needs no maintenance.
+</p>
+<p>
+  The reading pane shows six of them as a preview; the segment tag beside the
+  heading opens the whole bucket as a paged view — see
+  <a href="#frontend-segment">the segment view</a>.
+</p>
+
+<h3>Fields worth knowing</h3>
+<table>
+  <tr><th>Field</th><th>Why it exists</th></tr>
+  <tr><td><code>Phone Key</code></td>
+      <td>Normalised 10-digit number, or blank. The join key for banning a number
+          across all three tables. Blank is meaningful — see
+          <a href="#alg-pk">the phone-key rules</a>.</td></tr>
+  <tr><td><code>Removed</code></td>
+      <td>Checkbox. Every view except <b>Removed</b> filters it out. A removed lead
+          is hidden, never deleted.</td></tr>
+  <tr><td><code>Favorite</code></td><td>Checkbox behind the ★ and the Favorites tab.</td></tr>
+  <tr><td><code>Certs</code></td>
+      <td>Count of IICRC/RIA certifications, from the master DB. Stands in for
+          headcount on records that have no employee count.</td></tr>
+  <tr><td><code>Source File</code></td>
+      <td>Which spreadsheet a lead came from, or <code>LinkedIn search</code> for
+          rows the job search pulled in. The only audit trail there is —
+          keep populating it.</td></tr>
+  <tr><td><code>Job URL</code></td>
+      <td>Job board only. The posting's own address, and the identity the job
+          search dedupes on — see <a href="#alg-joburl">algorithm 5</a>.</td></tr>
+</table>
+
+<div class="note">
+  <strong>Notes are not the <code>Notes</code> field.</strong> The per-user
+  timestamped thread in the reading pane is NocoDB's <em>record comments</em> API
+  (<code>/api/v2/meta/comments</code>). The <code>Notes</code> column is a separate
+  free-text summary field, hidden from the grids.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="frontend">The front end</h2>
+
+<p>
+  <span class="file">public/app.js</span> — about 1,800 lines of plain JavaScript,
+  80 functions, no framework, no build step, no dependencies. Edit it and refresh.
+  All state lives in one object:
+</p>
+
+<pre><code>const S = {
+  token, me, baseId, tables,   <span class="cmt">// session + resolved NocoDB ids</span>
+  tab: "companies",            <span class="cmt">// which sidebar view</span>
+  q: "", status: "", state: "",<span class="cmt">// search + filters</span>
+  sort: "recent",
+  list: [], page: 1, pageSize: 50, total: 0,
+  sel: null,                   <span class="cmt">// the open lead</span>
+};</code></pre>
+
+<p>
+  Almost every interaction follows the same shape: mutate <code>S</code>, call
+  <code>loadList()</code>, re-render. There is no reactivity and no diffing —
+  rendering is <code>innerHTML</code> from a template string, then re-attaching
+  listeners.
+</p>
+
+<h3 id="frontend-boot">Booting and discovery</h3>
+<ol class="steps">
+  <li><b>Sign in.</b> <code>login()</code> POSTs to
+      <code>/api/v1/auth/user/signin</code> and stores the JWT in
+      <code>localStorage</code>. Every later request carries it as an
+      <code>xc-auth</code> header.</li>
+  <li><b>Discover.</b> <code>discover()</code> looks up the base by
+      <em>title</em>, then each table by title, then builds a
+      <code>{columnTitle: id}</code> map per table. <b>No id is ever hardcoded in
+      the front end</b> — a rebuild changes every id, and the app has to survive
+      that.</li>
+  <li><b>Reveal.</b> Only once discovery succeeds does <code>boot()</code> hide the
+      login screen. An account that authenticates but was never invited to the base
+      gets told so, instead of being dropped into an empty app.</li>
+  <li><b>Load.</b> Counts for the sidebar and stat tiles, then the first page of
+      the current tab.</li>
+</ol>
+
+<div class="warn">
+  <strong>The blank-page failure mode.</strong> <code>index.html</code> and
+  <code>app.js</code> must be updated together, so they're loaded as
+  <code>app.js?v=N</code> — <b>bump <code>N</code> whenever either changes</b>. If a
+  browser mixes a cached old file with a new one, the wiring code looks for elements
+  that don't exist. Wiring is best-effort now (the <code>on()</code> helper skips
+  missing elements and warns), but the version bump is the actual fix.
+</div>
+
+<h3 id="frontend-stats">The KPI row</h3>
+<p>
+  Six figures across the top, each with the ratio behind it drawn underneath. It
+  replaced four plain number cards: the numbers alone said <em>35,326 leads</em>
+  without saying whether we could actually reach them.
+</p>
+
+<div class="chart">
+  <h4>What the base is made of · 35,326 leads</h4>
+  <div class="compo">
+    <span style="width:93.17%;background:var(--cat-1)"></span>
+    <span style="width:6.59%;background:var(--cat-2)"></span>
+    <span style="width:0.24%;background:var(--cat-3)"></span>
+  </div>
+  <div class="legend">
+    <span><i style="background:var(--cat-1)"></i>Companies 32,913</span>
+    <span><i style="background:var(--cat-2)"></i>People 2,328</span>
+    <span><i style="background:var(--cat-3)"></i>Job board 85</span>
+  </div>
+</div>
+
+<div class="chart">
+  <h4>How we can reach them</h4>
+  <div class="bar-row">
+    <span>Phone number</span>
+    <span class="bar-track"><span class="bar-fill" style="width:91%"></span></span>
+    <span class="bar-val"><b>32,290</b> · 91%</span>
+  </div>
+  <div class="bar-row">
+    <span>Email address</span>
+    <span class="bar-track"><span class="bar-fill" style="width:33%"></span></span>
+    <span class="bar-val"><b>11,638</b> · 33%</span>
+  </div>
+  <div class="bar-row">
+    <span>Contacted</span>
+    <span class="bar-track"><span class="bar-fill" style="width:0%"></span></span>
+    <span class="bar-val"><b>0</b> · 0%</span>
+  </div>
+</div>
+
+<p>
+  That second chart is the one worth internalising: this is a calling list first
+  and a mailing list second. Anyone planning an email campaign off the base is
+  planning it against a third of it.
+</p>
+
+<p>The rendering rules are deliberate, and worth keeping if you add a tile:</p>
+<ul>
+  <li><b>Meter tracks are a lighter step of the fill's own hue</b>
+      (<code>--accent-soft</code> behind <code>--accent</code>), not grey, so the
+      state reads across the whole bar rather than just the filled part.</li>
+  <li><b>Every bar is labelled in words beside it.</b> No value is carried by
+      colour or bar length alone — which is also what makes the three
+      composition hues safe for colour-blind readers.</li>
+  <li><b>The three categorical hues were validated, not chosen by eye</b>, against
+      this app's own light and dark surfaces; the dark set is re-stepped for the
+      dark background rather than being an automatic flip.</li>
+  <li><b>Percentages are suppressed when the baseline is meaningless.</b> The
+      first version of "new this week" cheerfully reported <b>a rise of
+      8,000%</b>, because the previous week held exactly one lead. Under a
+      baseline of 10 it prints the prior week's count instead.</li>
+</ul>
+
+<p>
+  Cost-wise it's ~26 count queries per refresh, all fired in parallel (about 0.3s
+  against SQLite). <code>countAllWith()</code> skips tables that lack the column —
+  the job board has an <code>Email</code> but no <code>Phone</code>, and asking
+  NocoDB for a missing column is a 400 — and <code>refreshCounts()</code>
+  coalesces concurrent calls so a bulk import doesn't fire the fan-out repeatedly.
+</p>
+
+<div class="warn">
+  <strong>Native controls need <code>color-scheme</code>.</strong> The filter
+  dropdowns were unreadable in dark mode — white popup, near-white text. The cause
+  wasn't our CSS: nothing told the browser the page was dark, so Chrome painted
+  the OS-drawn popup light. <code>:root{color-scheme:light}</code> plus
+  <code>:root[data-theme="dark"]{color-scheme:dark}</code> is the actual fix, and
+  it repairs scrollbars and checkboxes at the same time. Styling
+  <code>option</code> alone doesn't cover every browser.
+</div>
+
+<h3 id="frontend-list">Listing, paging, sorting</h3>
+<p>
+  <code>buildWhere()</code> assembles NocoDB's filter string from the current state.
+  Its syntax is idiosyncratic — parenthesised triples joined by <code>~and</code> and
+  <code>~or</code>:
+</p>
+<pre><code><span class="cmt">// search "acme" + Florida + uncontacted, excluding removed leads</span>
+((Company,like,%acme%)~or(Email,like,%acme%)~or(City,like,%acme%))
+  ~and(Status,eq,New)
+  ~and((State,like,FL)~or(State,like,Florida))
+  ~and(Removed,notchecked)</code></pre>
+
+<p>Two details in there are load-bearing:</p>
+<ul>
+  <li><b>Both state spellings.</b> Our sources disagree — <code>FL</code> in one
+      file, <code>Florida</code> in the next — so the filter always matches both.
+      It uses <code>like</code> rather than <code>eq</code> because SQLite's
+      <code>=</code> is case-sensitive on text while <code>LIKE</code> is not.</li>
+  <li><b><code>notchecked</code>, not <code>eq,false</code>.</b> NocoDB checkbox
+      filters need <code>checked</code>/<code>notchecked</code>;
+      <code>(Removed,eq,false)</code> silently matches nothing.</li>
+</ul>
+
+<p>
+  Sorting is declared once and resolved per table. <code>@date</code> and
+  <code>@name</code> are placeholders, because the date column is
+  <code>Date Added</code> on two tables and <code>Posted</code> on the job board,
+  and the name column differs on all three:
+</p>
+<pre><code>{ key: "certs", label: "Most certifications", field: "Certs", dir: "desc" }
+{ key: "name",  label: "Name A–Z",            field: "@name", dir: "asc"  }</code></pre>
+<p>
+  <code>sortUsable()</code> then hides any option whose column the current table
+  doesn't have — that's why People has no "most certifications" and the job board has
+  no "highest revenue".
+</p>
+
+<h3>Paging, and the union tabs</h3>
+<p>
+  Ordinary tabs page straight against the API with <code>limit</code> and
+  <code>offset</code>, using <code>pageInfo.totalRows</code> for the page count.
+</p>
+<p>
+  <b>Favorites</b> and <b>Removed</b> are different: they span three
+  tables, and NocoDB has no cross-table query. So the app fetches enough rows from
+  each table to cover the requested page, merges them, re-sorts locally with
+  <code>unionComparator()</code>, and slices out the window. It's capped at
+  <code>UNION_MAX</code> (1,000) rows per table — far beyond anything those views
+  hold today, but it is a real ceiling if one of them ever grows.
+</p>
+
+<h3>Recent is an activity trail</h3>
+<p>
+  <b>Recent</b> used to mean "added in the last 30 days" — a fact about the data,
+  not about anything anyone did, and on a base built from years-old exports that
+  made it a near-empty tab nobody opened twice.
+</p>
+<p>
+  It now holds the last <b>25 leads you personally touched</b>, newest first:
+  opened, starred, re-statused, re-assigned, or noted. It starts empty for a new
+  account and fills as you work. Every one of those actions calls
+  <code>touchLead()</code>, which POSTs to <code>/app-api/recents</code> and moves
+  the lead to the top of your trail rather than duplicating it.
+</p>
+<p>
+  The trail lives server-side in <code>recents.json</code>, keyed by the email on
+  the signed-in JWT, so it follows the person from laptop to laptop and never
+  crosses accounts; <code>localStorage</code> only caches it so the tab paints
+  before the round trip. Opening the tab looks the recorded ids back up — one
+  request per table, an <code>~or</code> chain of <code>(Id,eq,N)</code> — and
+  quietly drops anything deleted or removed since. Twenty-five rows aren't worth a
+  where clause, so search, state and status filter locally, and the sort control is
+  disabled: the list has exactly one meaningful order.
+</p>
+<p>
+  Two details worth keeping: the write is fire-and-forget and never re-renders the
+  list on its response, because reshuffling rows under someone's pointer is worse
+  than being one entry stale; and writes on the server go through a single queue,
+  or two quick clicks would read the same file and one would clobber the other.
+</p>
+
+<h3 id="frontend-segment">The segment view</h3>
+<p>
+  A seventh tab that never appears in the sidebar. Clicking the segment tag in a
+  company's <b>Similar companies</b> block calls <code>openSegment(id, label)</code>,
+  which parks the id in <code>S.segment</code>, sets <code>S.tab&nbsp;=&nbsp;"segment"</code>
+  and gives <code>loadList()</code> a third branch. Rows come from the
+  Segments↔Companies <em>link</em> rather than the Companies table:
+</p>
+<pre><code>GET /api/v2/tables/{segmentsId}/links/{colId}/records/{segmentId}
+      ?limit&amp;offset&amp;fields&amp;where</code></pre>
+<p>Two things about that endpoint decided the design:</p>
+<ul>
+  <li><b>It ignores <code>sort</code>.</b> Not an error — it accepts the parameter
+      and returns the same order regardless. So the sort control is disabled and
+      reads <em>Segment order</em>, the same honesty the Recent tab uses. Don't
+      re-add sort options here; they would appear to work and wouldn't.</li>
+  <li><b>It projects down to <code>Id</code> + the primary value</b> unless you
+      pass <code>fields</code>. The first version rendered a segment as a bare
+      column of company names with no city, certs or date, because the endpoint
+      simply hadn't sent them. <code>SEGMENT_FIELDS</code> asks for what
+      <code>renderList()</code> draws, intersected with the columns the base
+      actually has.</li>
+</ul>
+<p>
+  <code>where</code> <em>is</em> honoured, so the search box and the state and
+  status filters keep working inside a segment — <code>buildWhere("companies")</code>
+  is reused unchanged. Any sidebar tab clears <code>S.segment</code> through
+  <code>setTab()</code>, and the <b>←</b> beside the title does the same.
+</p>
+
+<h3 id="frontend-detail">The reading pane</h3>
+<p>Clicking a row re-fetches the full record (the list only carries display fields) and renders:</p>
+<ul>
+  <li><b>Research buttons.</b> Google gets the company <em>plus its location</em>,
+      which is what separates one "ABC Restoration" from twelve others. LinkedIn
+      branches: on a person it searches name + company in all-results; on a company
+      or job it opens the <em>Companies</em> tab with the bare company name, because
+      a city in the keywords loses the page.</li>
+  <li><b>Click-to-copy email.</b> <code>copyText()</code> uses
+      <code>navigator.clipboard</code>, which needs a secure context — fine on
+      localhost, <em>not</em> over <code>http://&lt;lan-ip&gt;</code>, so there's an
+      <code>execCommand</code> fallback and an honest failure toast.</li>
+  <li><b>Related leads.</b> Follows the link columns: people at that company, its
+      job postings, and its segment's other companies.</li>
+  <li><b>Notes.</b> Loaded and posted through the record-comments API.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="import">Getting data in</h2>
+<p>
+  Three paths. The first two must agree with each other: both decide where a row
+  belongs, what its phone key is, and whether it's a duplicate — using the same
+  rules, implemented twice in two languages. The third only ever writes job
+  postings, so it plays by its own dedupe rules.
+</p>
+
+<div class="danger">
+  <strong>Change one, change the other.</strong>
+  <span class="file">dashboard/setup_v2.py</span> and
+  <span class="file">karma-leads-nocodb/import-leads.js</span> are ports of the same
+  logic. If they drift, an imported lead and a rebuilt lead end up in different
+  tables, and the blocklist stops being reliable.
+</div>
+
+<h3 id="import-rebuild">Path A — the full rebuild <span class="pill">destructive</span></h3>
+<pre><code>python dashboard/setup_v2.py</code></pre>
+<ol class="steps">
+  <li><b>Parse.</b> <code>collect()</code> in
+      <span class="file">setup_and_import.py</span> is a hardcoded manifest of
+      file → parser → category. Six parsers cover the six export shapes. Adding a
+      new source file means adding a line here.</li>
+  <li><b>Split.</b> Job-board rows go to jobs; a row whose person name differs from
+      its company goes to people; everything else is a company.</li>
+  <li><b>Dedupe</b> via the ladder below, merging non-empty fields into the kept row.</li>
+  <li><b>Create</b> the five tables, insert in batches of 100, then link people and
+      jobs to companies by normalised name and every company to its segment.</li>
+  <li><b>Build views</b> (main list, Recent&nbsp;30d, ⭐ Favorites, 🚫 Removed —
+      these are the NocoDB admin views, not the app's own tabs) and hide the
+      cluttered columns. Table and column ids are written to
+      <span class="file">dashboard/nocodb_ids.json</span>.</li>
+</ol>
+<p>
+  Statuses, owners, notes, comments, favourites <em>and every member's invitation</em>
+  are destroyed by this. The one exception is the blocklist: it's read out of the
+  live table first and restored afterwards, and any lead matching a banned number
+  comes back already removed.
+</p>
+
+<h3 id="import-drop">Path B — the drop zone <span class="pill">additive</span></h3>
+<p>
+  Drag a spreadsheet onto the app. The browser POSTs the raw bytes to
+  <code>/app-api/import</code>; <span class="file">import-leads.js</span> does the rest.
+</p>
+
+<div class="diagram">
+  <div class="row">
+    <div class="box"><b>1 · Read</b><div class="p">xlsx package</div>Every sheet, headers from row 1</div>
+    <span class="arrow">→</span>
+    <div class="box"><b>2 · Map</b><div class="p">mapHeaders()</div>Synonyms → canonical fields</div>
+    <span class="arrow">→</span>
+    <div class="box"><b>3 · Route</b><div class="p">company / person / job</div>Same rule as the rebuild</div>
+  </div>
+  <div class="down">↓</div>
+  <div class="row">
+    <div class="box"><b>4 · Dedupe</b><div class="p">existingKeys()</div>Against every email + phone in the base</div>
+    <span class="arrow">→</span>
+    <div class="box"><b>5 · Screen</b><div class="p">pk() + blocklist</div>Banned numbers arrive pre-removed</div>
+    <span class="arrow">→</span>
+    <div class="box hi"><b>6 · Insert</b><div class="p">100 at a time</div>As the signed-in user</div>
+  </div>
+</div>
+
+<p>Header mapping is what makes "just drop the file" work. A few of the synonyms:</p>
+<table>
+  <tr><th>Canonical</th><th>Accepted headers</th></tr>
+  <tr><td><code>company</code></td>
+      <td><code>Company</code>, <code>Company Name</code>, <code>Organization</code>,
+          <code>Account Name</code>, and <code>name</code> — but only when no other
+          column already claims the company role</td></tr>
+  <tr><td><code>name</code></td>
+      <td><code>First Name</code> + <code>Last Name</code>, <code>Full Name</code>,
+          <code>Contact</code>, <code>recruiter_name</code></td></tr>
+  <tr><td><code>phone</code></td>
+      <td>15 variants, tried in Apollo's own preference order: mobile → work direct
+          → corporate → company → …</td></tr>
+  <tr><td><code>employees</code></td>
+      <td><code># Employees</code>, <code>Headcount</code>,
+          <code>org_linkedin_headcount</code>, <code>Company Size</code></td></tr>
+</table>
+
+<p>
+  Job exports are detected by <em>shape</em>, not filename: the presence of
+  <code>organization</code>, or <code>date_posted</code>, or a
+  <code>url</code>+<code>title</code> pair. In a job file <code>title</code> means
+  the job title; everywhere else it means the person's job title. That one flag
+  changes several mappings at once.
+</p>
+
+<p>
+  The response drives the summary panel — what landed in each table, what was skipped
+  as a duplicate, what was blocked, and which columns were ignored so you can tell
+  when a file wasn't understood.
+</p>
+
+<h3 id="import-jobs">Path C — the LinkedIn job search <span class="pill">additive</span></h3>
+<p>
+  <b>🔎 Find jobs</b> queries the Apify actor
+  <code>fantastic-jobs/advanced-linkedin-job-search-api</code> and appends the
+  results to the job board. It is not a scraper — the actor serves a pre-built
+  index, so a run returns in two to four seconds.
+</p>
+
+<div class="diagram">
+  <div class="row">
+    <div class="box"><b>1 · Settings</b><div class="p">localStorage kl_jobsearch</div>Prefilled standard search; ⚙ edits it</div>
+    <span class="arrow">→</span>
+    <div class="box"><b>2 · Confirm</b><div class="p">max cost + credits left</div>Nothing is spent before this</div>
+    <span class="arrow">→</span>
+    <div class="box"><b>3 · Whitelist</b><div class="p">buildInput()</div>Server rebuilds the actor input; caps limit at 500</div>
+  </div>
+  <div class="down">↓</div>
+  <div class="row">
+    <div class="box"><b>4 · Run</b><div class="p">run-sync-get-dataset-items</div>One call, waits for the results</div>
+    <span class="arrow">→</span>
+    <div class="box"><b>5 · Dedupe</b><div class="p">Job URL, then title+company+city</div>Against the whole job board</div>
+    <span class="arrow">→</span>
+    <div class="box hi"><b>6 · Insert + bill</b><div class="p">100 at a time</div>Reports the exact amount charged</div>
+  </div>
+</div>
+
+<div class="danger">
+  <strong>The token never reaches the browser.</strong> It lives in
+  <span class="file">karma-leads-nocodb/apify_token.json</span> and is read
+  server-side per request. The browser posts search <em>parameters</em>, never a
+  request to Apify, and <code>buildInput()</code> rebuilds the actor input from a
+  whitelist rather than forwarding what it was sent — so a crafted request can't
+  raise the result cap or smuggle in extra actor options. Credits are real money;
+  this is the boundary that protects them.
+</div>
+
+<h4 style="font-size:15px;margin:22px 0 8px">Knowing the cost</h4>
+<p>
+  Billing is per job returned. Two figures matter, and they are <em>different</em>
+  figures:
+</p>
+<table>
+  <tr><th>When</th><th>What we show</th><th>Where it comes from</th></tr>
+  <tr><td>Before the run</td>
+      <td>A <b>maximum</b> — <code>limit × rate</code></td>
+      <td>Live rates via <code>actorRates()</code>. It's a ceiling: you only pay
+          for jobs actually returned, so a search matching nothing costs nothing.</td></tr>
+  <tr><td>After the run</td>
+      <td>The <b>actual</b> charge</td>
+      <td><code>found × rate + the flat start event</code>, computed locally.</td></tr>
+  <tr><td>Any time</td>
+      <td>Credits used / remaining, and a daily-spend chart</td>
+      <td><code>GET /app-api/apify-usage</code> → Apify's
+          <code>/users/me/limits</code> and <code>/usage/monthly</code>.</td></tr>
+</table>
+
+<div class="note">
+  <strong>Read the price from the actor, not from the docs.</strong> The store page
+  advertised "$1.50 per 1,000"; the actual charged event price is <b>$5.00 per
+  1,000</b> ($15 with <code>recruiterOnly</code>). <code>actorRates()</code> reads
+  the live <code>pricingPerEvent</code> off the actor and caches it for six hours,
+  so a vendor price change updates the estimates instead of quietly making them
+  wrong. The hardcoded rates in <code>RATES</code> are only a fallback.
+</div>
+<div class="note">
+  <strong>Why not just read <code>usageTotalUsd</code> off the run?</strong>
+  Because it lags. Apify's own run and account figures settle five to fifteen
+  seconds after the run finishes, which is longer than anyone will stare at a
+  result panel. Computing the charge from the returned count is exact and
+  immediate; the reported figures are kept only as an upward cross-check.
+</div>
+
+<h4 style="font-size:15px;margin:22px 0 8px">The default search</h4>
+<p>
+  <code>JS_DEFAULTS</code> in <span class="file">app.js</span> ships the standard
+  prospecting search, so the button is one click rather than a form: back-office
+  titles (office admin, estimator, bookkeeper, billing specialist…) crossed with
+  restoration description keywords (<em>water damage</em>, <em>Xactimate</em>,
+  <em>IICRC</em>…), US-wide, last 7 days, full-time, agencies hidden, and
+  <code>organizationEmployeesLte: 200</code> — a small firm hiring an office
+  administrator is the pitch.
+</p>
+<p>
+  Defaults merge with <code>??</code>, not <code>||</code>, which is the whole
+  trick: a field the user deliberately emptied <em>and saved</em> stays empty,
+  while a field they never touched still gets its default. <b>Reset</b> clears the
+  key to get them back.
+</p>
+
+<!-- ============================================================ -->
+<h2 id="algorithms">The five algorithms</h2>
+<p>
+  Four of these decide where a lead belongs and whether we've seen it before;
+  the fifth does the same job for job postings, which carry no phone number.
+</p>
+
+<h3 id="alg-split">1 · Where does this row go?</h3>
+<pre><code>if      (job file)                    → Job Board
+else if (name && company && name !== company) → People
+else                                  → Companies</code></pre>
+<p>
+  Deliberately blunt. A row that names a person <em>and</em> their employer is a
+  person; a row that only names a business is a company. Rows where the two columns
+  hold the same string — common in CRM exports where a sole trader is their own
+  company — are companies.
+</p>
+
+<h3 id="alg-dedupe">2 · Is this a duplicate?</h3>
+<p>A ladder, first match wins:</p>
+<ol>
+  <li><b>Email</b> (lowercased) — trustworthy, used whenever present</li>
+  <li><b>Phone</b> — last 10 digits, needs ≥7 digits</li>
+  <li><b>Name + city</b> — the fallback when there's no contact detail at all</li>
+</ol>
+<p>
+  Within a rebuild, later rows merge their non-empty fields into the kept row, so a
+  sparse record can be filled in by a richer one. On import, a matching row is simply
+  skipped and counted.
+</p>
+<div class="note">
+  This is why one business can legitimately appear twice: two sources, two different
+  phone numbers, no email. The dedupe never sees them as the same record. It shows up
+  as a company listed under its own "Similar companies".
+</div>
+
+<h3 id="alg-pk">3 · Is this number bannable?</h3>
+<p>
+  The most dangerous code in the project. Removing a lead bans its number and sweeps
+  every table — so a bad key means one click wipes out dozens of good leads.
+</p>
+<pre><code>function pk(phone) {
+  let d = digitsOnly(phone).slice(-10);
+  if (d.length !== 10)                      return null;  <span class="cmt">// not a US number</span>
+  if (d[0] === "0" || d[0] === "1")         return null;  <span class="cmt">// impossible area code</span>
+  if (new Set(d).size &lt;= 2)                 return null;  <span class="cmt">// 9000000000-style filler</span>
+  if (d.slice(3) === "0000000")             return null;  <span class="cmt">// same</span>
+  return d;
+}</code></pre>
+<div class="danger">
+  <strong>Do not loosen these checks.</strong> The Bitrix exports are full of
+  placeholders like <code>+119000000000</code> shared by up to <b>46 unrelated
+  companies</b>. Rejecting them entirely is why banning a number is safe. A lead with
+  no key removes only itself.
+</div>
+<p>
+  As a second line of defence, the remove dialog counts the blast radius and shows it
+  <em>before</em> you confirm — some franchise and toll-free lines really are shared
+  by several businesses.
+</p>
+
+<h3 id="alg-dates">4 · When was this lead added?</h3>
+<p>
+  OneDrive rewrites file modification times, so those are worthless. Instead the date
+  comes from the <code>MMDD</code> token in the filename —
+  <code>Apollo Mobile Export 0428.csv</code> → 28 April — with months 1–7 read as
+  2025 and 8–12 as 2024, matching the verified timestamps inside the files. Files
+  with no token get a blank date, which is why some leads never count towards
+  "New this week" and never sort to the top under "Newest first". Imported files
+  just get today.
+</p>
+
+<h3 id="alg-joburl">5 · Is this job already on the board?</h3>
+<p>
+  Job postings have no phone and usually no email, so the ladder above has nothing
+  to work with. Jobs get their own identity:
+</p>
+<ol>
+  <li><b>Job URL</b>, with the query string and trailing slash stripped — the
+      posting's own address, and the reliable key.</li>
+  <li><b>Title + company + city</b>, lowercased — because LinkedIn re-posts one
+      opening under several job ids, and the vendor's own docs recommend fuzzy
+      matching on title + organisation for exactly this reason.</li>
+</ol>
+<div class="warn">
+  <strong>Don't dedupe on <code>ats_duplicate</code>.</strong> The actor returns
+  that flag, and it reads like "this is a duplicate" — it isn't. It means the
+  posting also appears in the vendor's <em>other</em> dataset, which says nothing
+  about the results in front of you. An early version skipped those rows and threw
+  away half of every search: ten jobs found, five silently discarded.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="nocodb">NocoDB's sharp edges</h2>
+<table>
+  <tr><th>Edge</th><th>What happens</th></tr>
+  <tr><td><b>Bulk insert cap</b></td>
+      <td>More than 100 records per POST returns 422
+          <code>ERR_MAX_PAYLOAD_LIMIT_EXCEEDED</code>. Everything batches at 100.</td></tr>
+  <tr><td><b>Checkbox filters</b></td>
+      <td>Need <code>checked</code>/<code>notchecked</code>.
+          <code>(Favorite,eq,true)</code> matches nothing, silently.</td></tr>
+  <tr><td><b>Two link types</b></td>
+      <td>A link column created on the parent is <code>Links</code>; the mirror
+          auto-created on the child is <code>LinkToAnotherRecord</code>. Code that
+          scans for links must accept both — missing this silently skipped a rename
+          during development.</td></tr>
+  <tr><td><b>Linking direction</b></td>
+      <td>Link from the parent side to attach many children in one call.</td></tr>
+  <tr><td><b>Server startup</b></td>
+      <td><code>Noco.init({}, httpServer, app)</code> — the 3-argument form.
+          <code>Noco.init({})</code> alone throws.</td></tr>
+  <tr><td><b>Ids are not stable</b></td>
+      <td>Every rebuild issues new base/table/column ids. The front end resolves them
+          by title at runtime; only the Python scripts read
+          <code>nocodb_ids.json</code>.</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="changing">Changing things safely</h2>
+
+<h3>Adding a field to the app</h3>
+<ol>
+  <li>Add the column in <code>setup_v2.py</code> so rebuilds keep it.</li>
+  <li>Map it in <code>import-leads.js</code> if a spreadsheet can supply it.</li>
+  <li>Render it in <code>renderDetail()</code> or <code>factsHtml()</code>.</li>
+  <li>Add a <code>SORTS</code> entry if it's worth sorting by — the option
+      auto-hides on tables without the column.</li>
+  <li>Bump <code>?v=</code> in <span class="file">index.html</span>.</li>
+</ol>
+
+<h3>Adding a new source spreadsheet</h3>
+<p>
+  For a one-off, just drop it on the app. To make it part of rebuilds, add a line to
+  <code>collect()</code> — reusing an existing parser if the columns match, which
+  they usually do.
+</p>
+
+<h3>Changing the job search</h3>
+<ol>
+  <li>New actor input? Add it to the whitelist in <code>buildInput()</code>
+      (<span class="file">job-search.js</span>) <em>and</em> to the request body in
+      <code>runJobSearch()</code> — a parameter the server doesn't know about is
+      dropped silently, which looks exactly like the filter not working.</li>
+  <li>Add the control to <code>openJobSearchSettings()</code>, its key to
+      <code>jsSettings()</code>/<code>collect()</code>, and a default to
+      <code>JS_DEFAULTS</code> if it should be on out of the box.</li>
+  <li>Show it on the confirm screen if it changes what gets searched or what it
+      costs. That screen is the last thing between a click and a charge.</li>
+  <li>Bump <code>?v=</code> in <span class="file">index.html</span>.</li>
+</ol>
+<div class="warn">
+  Test with <code>limit: 10</code>. Every test run is billed, and the actor's
+  minimum is 10 — about 5¢ a go.
+</div>
+
+<h3>Before you run a rebuild</h3>
+<div class="warn">
+  Copy the app folder first. A rebuild discards every status, note, owner, favourite
+  and member invitation in exchange for re-reading the files, and there is no undo.
+  Ask whether the drop zone would do the job instead.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="build">Building one of these</h2>
+<p class="lede">
+  A walkthrough for someone comfortable with pandas and SQL who hasn't shipped a
+  team-facing data tool before. Every phase below names the decision, the reason,
+  and what this project actually got wrong first.
+</p>
+<p>
+  The through-line: <b>a lead database is not an analysis, it's an operational
+  system.</b> Analyses are read-only, single-user, and finished. This is written
+  to by several people, forever. Almost every decision below follows from that
+  one difference — and it is the difference a notebook-shaped instinct will miss.
+</p>
+
+<div class="phase" id="build-profile">
+  <h3>1 · Profile the data before you design anything</h3>
+  <p>
+    Resist opening a schema designer. Load every file, concatenate nothing, and
+    count: rows per file, non-null rate per column, distinct values per column,
+    and the top 20 values of anything you plan to key on or filter by.
+  </p>
+  <p>What that surfaced here, none of which was in anyone's head beforehand:</p>
+  <ul>
+    <li>Firmographic coverage varies <em>by source</em>, not at random — Apollo
+        rows have headcount ~90% of the time, Bitrix rows ~2%. Any "average
+        company size" across the whole base is meaningless.</li>
+    <li>States are spelled two ways (<code>FL</code> and <code>Florida</code>)
+        because different exporters disagree. Group by state naively and you get
+        two of everything.</li>
+    <li>Bitrix writes numeric internal IDs into City, State <em>and</em> Industry
+        columns. They look like data and are not.</li>
+    <li>A licence column that looked like a trade classifier was mostly bare
+        codes — <code>HIC</code>, <code>CGC</code>, <code>B</code>.</li>
+  </ul>
+  <div class="took"><b>What it cost to skip:</b> nothing here, because it was
+    done first — but every one of those four would have become a schema decision
+    that had to be unwound later. Profiling is the cheapest hour in the project.</div>
+</div>
+
+<div class="phase" id="build-schema">
+  <h3>2 · Let the data pick the schema, not your ER instincts</h3>
+  <p>
+    Version one of this project was a single flat <code>Leads</code> table —
+    every row from every source, one wide schema. It worked, and it was wrong:
+    it read like a spreadsheet, which was the exact thing the project existed to
+    escape. Half the columns were empty for any given row, because a
+    <em>company</em> lead and a <em>person</em> lead genuinely need different
+    fields.
+  </p>
+  <p>
+    The split came from a property already present in the data: <b>a row that
+    names a person and their employer is a different kind of thing from a row
+    that only names a business.</b> That one test produces the whole model —
+    Companies, People, Job Board — and it is three lines of code:
+  </p>
+  <pre><code>if   is_job_export(file)                          → Job Board
+elif name and company and name != company        → People
+else                                             → Companies</code></pre>
+  <p>
+    The <code>name != company</code> guard matters: CRM exports of sole traders
+    put the same string in both columns, and without it every one-person
+    business becomes a fictional person.
+  </p>
+  <div class="took"><b>What it cost:</b> one full rewrite (v1 → v2). Cheap here
+    because no one was using it yet. Do this before humans start entering data,
+    not after.</div>
+</div>
+
+<div class="phase" id="build-identity">
+  <h3>3 · Identity and dedupe — the part that will actually hurt</h3>
+  <p>
+    Merging lead lists is a record-linkage problem wearing a friendly hat. There
+    is no shared key across sources, so you build a ladder of decreasingly
+    trustworthy ones and take the first that fires:
+  </p>
+  <ol>
+    <li><b>Email</b> — reliable when present</li>
+    <li><b>Phone</b>, normalised to the last 10 digits</li>
+    <li><b>Name + city</b> — the fallback when there's no contact detail at all</li>
+  </ol>
+  <p>
+    The lesson worth carrying to your next project is the trap underneath this.
+    A key is only a key if it is <em>actually unique</em>, and you must check
+    rather than assume. Here, one Bitrix placeholder number
+    (<code>+119000000000</code>-style) was shared by <b>46 unrelated
+    companies</b>. Keying on it would have meant one "do not call this number"
+    click silently deleting 46 good leads.
+  </p>
+  <p>
+    So before trusting any key, run the cheapest possible diagnostic —
+    <code>value_counts()</code> on it and look at the top of the distribution:
+  </p>
+  <pre><code><span class="cmt"># if your "unique" key has a fat head, it isn't one</span>
+df.groupby(phone_key).size().sort_values(ascending=False).head(20)</code></pre>
+  <p>
+    Anything with an implausible count is a placeholder, a switchboard, or a
+    parsing bug. The fix here was to <em>refuse to generate a key at all</em> for
+    numbers failing a validity test (bad area code, ≤2 distinct digits, seven
+    trailing zeros) — see <a href="#alg-pk">algorithm 3</a>. A record with no key
+    is honest; a record with a wrong key is contagious.
+  </p>
+  <div class="took"><b>What it cost:</b> nothing, because the distribution check
+    caught it. Had it shipped, the damage would have been silent and gradual —
+    the worst kind.</div>
+</div>
+
+<div class="phase" id="build-store">
+  <h3>4 · Choose the storage layer by who writes to it</h3>
+  <p>
+    The instinct is a notebook plus a Parquet file, and it is wrong here for one
+    reason: <b>the team writes back.</b> Statuses, owners, notes, favourites,
+    do-not-call flags. The moment humans produce data, you need concurrency,
+    durability and access control, and you have left analysis-land.
+  </p>
+  <table>
+    <tr><th>Option</th><th>Why not / why</th></tr>
+    <tr><td>Notebook + Parquet/CSV</td>
+        <td>No concurrent writes, no auth, no referential integrity. Fine for
+            the profiling in phase 1; unusable as the system of record.</td></tr>
+    <tr><td>Shared spreadsheet</td>
+        <td>What the team was already escaping. Lost edits, no types, no joins.</td></tr>
+    <tr><td>Postgres + a web app you write</td>
+        <td>Correct, and the most work: you own auth, migrations, an admin UI
+            and a REST layer before you show anyone anything.</td></tr>
+    <tr><td><b>NocoDB on SQLite</b> <span class="pill">chosen</span></td>
+        <td>Gives the database, a REST API, authentication, permissions and an
+            admin UI for free. You inherit its quirks (see
+            <a href="#nocodb">sharp edges</a>) but skip weeks of plumbing.</td></tr>
+  </table>
+  <p>
+    The general principle: for internal tools, <b>buy the boring layers and
+    spend your effort on the part that is specific to your problem</b> — here,
+    the parsers and the dedupe. Nobody will thank you for a hand-rolled login page.
+  </p>
+</div>
+
+<div class="phase" id="build-pipeline">
+  <h3>5 · Write the pipeline so it can run twice</h3>
+  <p>
+    Structure it as <b>parse → clean → route → dedupe → load</b>, with each stage
+    a pure function you can test on one file. The parsers are the only part that
+    should know a source's quirks; everything downstream sees a normalised dict.
+  </p>
+  <p>Three things to build in from the first commit, not retrofit:</p>
+  <ul>
+    <li><b>Idempotency.</b> Re-running must be a no-op, not a duplicate.
+        Every loader here checks what's already present first. The DNC importer
+        is the clearest case — run it monthly and it applies only the difference.</li>
+    <li><b>A dry run.</b> Any script that mutates shared state should be able to
+        print exactly what it <em>would</em> do. This is what makes a destructive
+        operation reviewable instead of a leap of faith.</li>
+    <li><b>Batch limits.</b> Every API has one. NocoDB rejects more than 100
+        records per insert. Discover that in a helper, once, rather than in five
+        call sites.</li>
+  </ul>
+  <div class="took"><b>What it cost:</b> the rebuild script wasn't idempotent —
+    it deletes and recreates — which is why running it destroys statuses, notes
+    and member invitations. That constraint has shaped every decision since, and
+    is why the additive drop-zone importer exists at all.</div>
+</div>
+
+<div class="phase" id="build-ui">
+  <h3>6 · The interface is where adoption is won or lost</h3>
+  <p>
+    NocoDB ships a perfectly good grid. The team wouldn't use it, because a grid
+    of 33,000 rows is a spreadsheet, and they had one. The custom front end is an
+    email-style three-pane reader: list, one record open, notes underneath — a
+    shape people already know how to use.
+  </p>
+  <p>Two engineering choices that paid off repeatedly:</p>
+  <ul>
+    <li><b>Resolve IDs at runtime by name.</b> Every rebuild issues new
+        base/table/column IDs. The front end looks everything up by title on
+        boot, so a rebuild doesn't break it. Hardcoding IDs would have meant
+        editing the app after every rebuild.</li>
+    <li><b>No build step.</b> Plain HTML/CSS/JS, edit and refresh. For a
+        single-team internal tool the entire npm toolchain is a tax with no
+        return — and it means anyone can fix a label without a node install.</li>
+  </ul>
+  <div class="took"><b>What it cost:</b> one whole-app outage class. Because
+    <code>index.html</code> and <code>app.js</code> must change together, a
+    browser caching one and not the other threw during wiring and rendered a
+    blank page. Hence the <code>?v=N</code> cache-bust discipline.</div>
+</div>
+
+<div class="phase" id="build-enrich">
+  <h3>7 · Paid enrichment: treat the API key like money</h3>
+  <p>
+    Bolting on a paid data source (here, LinkedIn jobs via Apify) introduces a
+    failure mode analysis code never has: <b>a bug can spend real money.</b> The
+    rules that fell out of it generalise to any metered API:
+  </p>
+  <ul>
+    <li><b>The key never reaches the browser.</b> It lives server-side and the
+        client posts <em>parameters</em>, never a request. Otherwise every
+        teammate's dev tools is a spending console.</li>
+    <li><b>Rebuild the request from a whitelist.</b> Don't forward what the
+        client sent. That is what enforces the result cap.</li>
+    <li><b>Show a ceiling before, the actual charge after.</b> Never let someone
+        click a button whose cost they can't bound.</li>
+    <li><b>Read prices from the API, not the docs.</b> The store page advertised
+        $1.50 per 1,000; the real charged event price was $5.00. Anything you
+        hardcode from documentation is a number that will quietly go stale.</li>
+    <li><b>Validate the vendor's flags against reality.</b> An
+        <code>ats_duplicate</code> field read like "this is a duplicate" and
+        actually meant "also present in our other dataset". Trusting the name
+        silently discarded half of every search.</li>
+  </ul>
+</div>
+
+<div class="phase" id="build-ops">
+  <h3>8 · The operational half nobody teaches</h3>
+  <p>
+    A shipped tool needs care that no course covers. The three that bit hardest
+    here:
+  </p>
+  <ul>
+    <li><b>Watch the database's own exhaust.</b> NocoDB logs every insert
+        <em>and every link</em> to an audit table with the full row JSON inline.
+        Loading 35k rows and linking them wrote ~180 MB per rebuild. The file
+        reached <b>1.3 GB holding 7 MB of leads</b> — a 185× overhead, invisible
+        until someone checked the folder size.</li>
+    <li><b>"Delete" often isn't.</b> Deleting a base in NocoDB sets
+        <code>deleted=1</code> and leaves every physical table and row in place.
+        Seven dead bases had accumulated, including five complete copies of the
+        Companies table.</li>
+    <li><b>SQLite doesn't shrink on its own.</b> Deleting rows moves pages to a
+        freelist; the file stays the same size until you <code>VACUUM</code>,
+        which needs exclusive access. Cleanup took the file from 1,296 MB to
+        11 MB.</li>
+  </ul>
+  <p>
+    The habit worth forming: <b>periodically measure the thing, not the code.</b>
+    Row counts, file sizes, key distributions, response times. Every problem in
+    this list was invisible in the source and obvious in one measurement.
+  </p>
+</div>
+
+<div class="note">
+  <strong>If you're rebuilding this from scratch,</strong> the order that would
+  have saved the most time: profile (1) → identity rules and their distribution
+  check (3) → schema (2) → smallest possible loader with a dry run (5) → put it
+  in front of a user → only then the interface (6). The interface is the fun
+  part and the least likely to be wrong; the identity rules are the boring part
+  and the most expensive to get wrong.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="timeline">Timeline</h2>
+<p>
+  How the project actually got here, from the first pile of exports to the
+  current system. Dates are from the working files.
+</p>
+
+<ul class="tl">
+  <li>
+    <div class="when">2026-07-10</div>
+    <div class="what">Thirteen exports land in a folder</div>
+    <div class="why">Apollo contact exports, Bitrix CRM dumps, vendor lists,
+      independent- and public-adjuster lists, insurance companies. ~38,000 rows
+      across incompatible schemas, and no way to work them except opening each
+      file in turn.</div>
+  </li>
+  <li>
+    <div class="when">2026-07-30</div>
+    <div class="what">First LinkedIn job data, pulled by hand</div>
+    <div class="why">A one-off Apify dataset CSV, downloaded manually and
+      imported like any other spreadsheet. This is the ancestor of the
+      <a href="#import-jobs">Find jobs</a> button — the manual version came
+      first, and only became a feature once it had proved useful.</div>
+  </li>
+  <li class="minor">
+    <div class="when">2026-07-31 · morning</div>
+    <div class="what">NocoDB running locally on SQLite</div>
+    <div class="why">Server on :8080, database deliberately outside OneDrive so a
+      live SQLite file is never cloud-synced.</div>
+  </li>
+  <li>
+    <div class="when">2026-07-31 · 12:34</div>
+    <div class="what">v1 — one flat <code>Leads</code> table</div>
+    <div class="why"><span class="file">setup_and_import.py</span>: six parsers,
+      one per export shape, all feeding a single wide table. It worked and it
+      read like a spreadsheet, which was the problem it was meant to solve.</div>
+  </li>
+  <li>
+    <div class="when">2026-07-31 · 13:09</div>
+    <div class="what">v2 — the five-table split <span class="tag">rewrite</span></div>
+    <div class="why"><span class="file">setup_v2.py</span> splits leads into
+      Companies, People and Job Board, adds Segments (Category × State) to power
+      "similar companies", and a Blocklist for banned numbers. v1 stays as the
+      home of the file parsers, which v2 imports.</div>
+  </li>
+  <li>
+    <div class="when">2026-07-31 · afternoon</div>
+    <div class="what">The custom front end, and the login that lied</div>
+    <div class="why">Email-style three-pane client over the REST API. An
+      <code>admin/admin</code> shorthand was removed the same day: it mapped to
+      an account with no base membership, so it signed in successfully and then
+      rendered an empty app. Sign-in now fails closed with an explanation.</div>
+  </li>
+  <li>
+    <div class="when">2026-08-02</div>
+    <div class="what">Recent becomes an activity trail</div>
+    <div class="why">"Added in the last 30 days" was a fact about the data, not
+      about anything anyone did — and on years-old exports it was a near-empty
+      tab. Rebuilt as the last 25 leads <em>you</em> touched, stored server-side
+      per account so it follows the person between browsers.</div>
+  </li>
+  <li>
+    <div class="when">2026-08-02</div>
+    <div class="what">Drop-zone spreadsheet import</div>
+    <div class="why">The additive counterpart to the destructive rebuild: drag a
+      file onto the app and it lands without touching anyone's work. A
+      deliberate port of the rebuild's routing and dedupe rules — the two must
+      agree or an import and a rebuild disagree about where a row belongs.</div>
+  </li>
+  <li>
+    <div class="when">2026-08-03 · 00:05</div>
+    <div class="what">LinkedIn job search on a button <span class="tag">costs money</span></div>
+    <div class="why">The manual Apify pull from 30 July becomes
+      <span class="file">job-search.js</span>: pre-filled prospecting search,
+      server-side key, whitelisted input, cost ceiling before and actual charge
+      after. First run of the real thing cost $0.05.</div>
+  </li>
+  <li>
+    <div class="when">2026-08-03</div>
+    <div class="what">KPI row, and the dark-mode filters nobody could read</div>
+    <div class="why">Four plain counters became six with coverage meters —
+      surfacing that 91% of leads have a phone but only 33% an email, which
+      reframes the base as a calling list. The dark-mode dropdowns turned out
+      not to be a CSS bug: nothing declared <code>color-scheme</code>, so Chrome
+      painted its native popup light.</div>
+  </li>
+  <li>
+    <div class="when">2026-08-03</div>
+    <div class="what">Segment browsing, and a straighter UI</div>
+    <div class="why">The segment tag became a way into the whole bucket rather
+      than a caption over six examples. Corner radii shallowed, emoji nav icons
+      replaced with line icons, the logo redrawn as SVG, and company avatars
+      dropped from the reading pane — an initials circle beside a company name
+      reads as a logo we don't have.</div>
+  </li>
+  <li>
+    <div class="when">2026-08-03 · 01:38</div>
+    <div class="what">1,296 MB → 11 MB <span class="tag">operations</span></div>
+    <div class="why">Someone asked whether 2.5 GB was normal. It wasn't: 586,497
+      audit rows and seven soft-deleted bases. Audit logging switched off,
+      orphans dropped, <code>VACUUM</code> run. See
+      <a href="#build-ops">phase 8</a>.</div>
+  </li>
+  <li>
+    <div class="when">2026-08-03 · 01:37</div>
+    <div class="what">Do-not-call list applied <span class="tag now">current</span></div>
+    <div class="why"><span class="file">import_dnc.py</span> takes a CRM
+      suppression export and bans it in bulk. First run: 531 numbers from 756
+      rows, removing 229 companies and 22 people. State names also stopped being
+      abbreviated anywhere on screen.</div>
+  </li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="files">File map</h2>
+<table>
+  <tr><th>File</th><th>Lines</th><th>What it does</th></tr>
+  <tr><td><span class="file">karma-leads-nocodb/index.js</span></td><td class="num">108</td>
+      <td>Serves <code>/app</code>, registers every <code>/app-api</code> route, starts NocoDB</td></tr>
+  <tr><td><span class="file">karma-leads-nocodb/import-leads.js</span></td><td class="num">375</td>
+      <td>Spreadsheet → parsed → deduped → inserted. Also exports the shared
+          NocoDB helpers (<code>nc</code>, <code>discover</code>,
+          <code>insertAll</code>) that the job search reuses</td></tr>
+  <tr><td><span class="file">karma-leads-nocodb/job-search.js</span></td><td class="num">281</td>
+      <td>Apify actor call, input whitelist, job dedupe, cost and credit reporting</td></tr>
+  <tr><td><span class="file">karma-leads-nocodb/recents.js</span></td><td class="num">106</td>
+      <td>Per-account activity trail behind the Recent tab</td></tr>
+  <tr><td><span class="file">karma-leads-nocodb/public/app.js</span></td><td class="num">1805</td>
+      <td>The whole front end</td></tr>
+  <tr><td><span class="file">karma-leads-nocodb/public/app.css</span></td><td class="num">699</td>
+      <td>Styling, light and dark, three row densities, the KPI row</td></tr>
+  <tr><td><span class="file">karma-leads-nocodb/public/index.html</span></td><td class="num">183</td>
+      <td>Shell markup — versioned asset links live here</td></tr>
+  <tr><td><span class="file">karma-leads-nocodb/apify_token.json</span></td><td class="num">—</td>
+      <td>Apify key. Server-side only; never served to the browser</td></tr>
+  <tr><td><span class="file">dashboard/setup_v2.py</span></td><td class="num">440</td>
+      <td>Destructive rebuild: split, link, segment, views</td></tr>
+  <tr><td><span class="file">dashboard/setup_and_import.py</span></td><td class="num">497</td>
+      <td>v1 importer, still the home of every file parser and cleaning helper</td></tr>
+  <tr><td><span class="file">dashboard/nocodb_ids.json</span></td><td class="num">—</td>
+      <td>Table/column ids, regenerated by each rebuild, read by the Python scripts</td></tr>
+  <tr><td><span class="file">dashboard/blocklist.json</span></td><td class="num">—</td>
+      <td>Optional seed list of banned numbers, applied on rebuild</td></tr>
+</table>
+
+<footer>
+  Karma Leads · internal documentation · open
+  <span class="file">dashboard/README.md</span> for the user guide.
+</footer>
+
+</main>
+</body>
+</html>

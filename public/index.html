@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Karma Leads</title>
+<!-- geometric K, drawn rather than typeset, so it matches the mark in the app -->
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%232f54eb'/><path d='M11 7.5v17M11 16l9.5-8.5M11 16l9.5 8.5' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round' fill='none'/></svg>">
+<!-- bump ?v= whenever app.js/app.css change so no one gets a half-old app -->
+<link rel="stylesheet" href="app.css?v=14">
+</head>
+<body>
+
+<!-- ============ LOGIN ============ -->
+<div id="login-screen" class="login-screen hidden">
+  <div class="login-card">
+    <div class="login-logo">
+      <svg class="logo-mark" viewBox="0 0 32 32" aria-hidden="true">
+        <rect width="32" height="32" rx="6"/>
+        <path d="M11 7.5v17M11 16l9.5-8.5M11 16l9.5 8.5"/>
+      </svg>
+      <span class="wordmark"><b>Karma</b>Leads</span>
+    </div>
+    <p class="login-sub">Sign in with your team account</p>
+    <form id="login-form">
+      <label>Email
+        <input type="email" id="login-email" autocomplete="username"
+               placeholder="you@karmastaff.com" required>
+      </label>
+      <label>Password
+        <input type="password" id="login-password" autocomplete="current-password" required>
+      </label>
+      <div id="login-error" class="login-error hidden"></div>
+      <button type="submit" class="btn-primary btn-block">Sign in</button>
+    </form>
+  </div>
+</div>
+
+<!-- ============ APP ============ -->
+<div id="app" class="app hidden">
+
+  <header class="topbar">
+    <div class="brand">
+      <svg class="logo-mark" viewBox="0 0 32 32" aria-hidden="true">
+        <rect width="32" height="32" rx="6"/>
+        <path d="M11 7.5v17M11 16l9.5-8.5M11 16l9.5 8.5"/>
+      </svg>
+      <span class="wordmark"><b>Karma</b>Leads</span>
+    </div>
+    <div class="searchbox">
+      <svg viewBox="0 0 24 24" class="ic"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="M20 20l-3.5-3.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      <input id="search" type="search" placeholder="Search leads" autocomplete="off">
+    </div>
+    <div class="topbar-right">
+      <!-- label names the mode you'd switch to, so the button reads as an action -->
+      <button id="theme-toggle" class="btn-ghost btn-theme" title="Switch theme">
+        <span class="theme-ic-dark">Dark</span><span class="theme-ic-light">Light</span>
+      </button>
+      <div class="user-menu">
+        <button id="user-avatar" class="avatar avatar-me">?</button>
+        <div id="user-dropdown" class="dropdown hidden">
+          <div class="dropdown-head">
+            <div id="menu-name" class="dd-name"></div>
+            <div id="menu-email" class="dd-email"></div>
+          </div>
+          <a href="/dashboard" target="_blank" class="dropdown-item">Open NocoDB admin</a>
+          <button id="logout-btn" class="dropdown-item">Sign out</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- KPI row: value + a meter/composition bar per tile, filled by runCounts() -->
+  <div class="stats" id="stats">
+    <div class="stat">
+      <div class="stat-label">Total leads</div>
+      <div class="stat-value" id="stat-total">–</div>
+      <div class="stat-viz" id="viz-total"></div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Phone numbers</div>
+      <div class="stat-value" id="stat-phone">–</div>
+      <div class="stat-viz" id="viz-phone"></div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Email addresses</div>
+      <div class="stat-value" id="stat-email">–</div>
+      <div class="stat-viz" id="viz-email"></div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Contacted</div>
+      <div class="stat-value" id="stat-contacted">–</div>
+      <div class="stat-viz" id="viz-contacted"></div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Qualified</div>
+      <div class="stat-value" id="stat-qualified">–</div>
+      <div class="stat-viz" id="viz-qualified"></div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">New this week</div>
+      <div class="stat-value" id="stat-week">–</div>
+      <div class="stat-viz" id="viz-week"></div>
+    </div>
+  </div>
+
+  <div class="main">
+    <nav class="sidebar">
+      <div class="nav-section">Views</div>
+      <!-- line icons rather than emoji: emoji render differently per platform
+           and carry their own colour, which fights the active/inactive state -->
+      <button class="nav-item" data-tab="companies">
+        <svg class="nav-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 21h18M5 21V5.8c0-.44.36-.8.8-.8h6.4c.44 0 .8.36.8.8V21M13 21V10.5h4.7c.44 0 .8.36.8.8V21M7.6 8.6h3M7.6 12.3h3M7.6 16h3M15.4 14h1.4M15.4 17.4h1.4"/></svg>
+        Companies <span class="nav-count" id="count-companies"></span></button>
+      <button class="nav-item" data-tab="people">
+        <svg class="nav-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M15.2 20v-1.6a3.4 3.4 0 0 0-3.4-3.4H6.6a3.4 3.4 0 0 0-3.4 3.4V20M9.2 11.6a3.3 3.3 0 1 0 0-6.6 3.3 3.3 0 0 0 0 6.6ZM20.8 20v-1.6a3.4 3.4 0 0 0-2.55-3.29M15.4 5.2a3.3 3.3 0 0 1 0 6.2"/></svg>
+        People <span class="nav-count" id="count-people"></span></button>
+      <button class="nav-item" data-tab="jobs">
+        <svg class="nav-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4.2 7.8h15.6c.55 0 1 .45 1 1v9.4c0 .55-.45 1-1 1H4.2c-.55 0-1-.45-1-1V8.8c0-.55.45-1 1-1ZM9 7.8V5.9c0-.5.4-.9.9-.9h4.2c.5 0 .9.4.9.9v1.9M3.2 12.6h17.6M10.7 12.6h2.6"/></svg>
+        Job board <span class="nav-count" id="count-jobs"></span></button>
+      <button class="nav-item" data-tab="recent">
+        <svg class="nav-ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.2"/><path d="M12 7.2V12l3.2 2.1"/></svg>
+        Recent <span class="nav-count" id="count-recent"></span></button>
+      <button class="nav-item" data-tab="favorites">
+        <svg class="nav-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 4.3 2.42 4.9 5.41.79-3.92 3.81.93 5.39L12 16.65 7.16 19.19l.93-5.39-3.92-3.81 5.41-.79L12 4.3Z"/></svg>
+        Favorites <span class="nav-count" id="count-favorites"></span></button>
+      <button class="nav-item" data-tab="removed">
+        <svg class="nav-ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.2"/><path d="m6.2 6.2 11.6 11.6"/></svg>
+        Removed <span class="nav-count" id="count-removed"></span></button>
+      <div class="sidebar-foot">
+        <div class="job-search-row">
+          <button id="job-search-btn" class="btn-primary">🔎 Find jobs</button>
+          <button id="job-search-settings" class="btn-ghost btn-gear" title="Job search settings">⚙</button>
+        </div>
+        <div id="credits-line" class="credits-line" title="Apify credits remaining this billing cycle"></div>
+        <button id="import-btn" class="btn-primary btn-block">⬆ Import leads</button>
+      </div>
+    </nav>
+
+    <section class="list-pane">
+      <div class="list-head" id="list-head">
+        <button id="segment-back" class="seg-back hidden"
+                title="Back to all companies">
+          <span class="seg-back-arrow">←</span> Back to Companies</button>
+        <div class="list-title-wrap">
+          <div class="seg-eyebrow hidden" id="seg-eyebrow">Segment</div>
+          <h2 id="list-title">Companies</h2>
+        </div>
+        <div class="list-filters">
+          <button id="clear-recents" class="btn-ghost hidden"
+                  title="Forget the leads in this list">Clear</button>
+          <div class="density-toggle" title="Row height">
+            <button data-density="compact" title="Compact">▤</button>
+            <button data-density="cozy" title="Cozy">▥</button>
+            <button data-density="comfortable" title="Comfortable">▦</button>
+          </div>
+        </div>
+      </div>
+      <div class="list-controls">
+        <label class="ctl"><span class="ctl-ic">⇅</span>
+          <select id="sort-by" title="Sort the list"></select>
+        </label>
+        <label class="ctl"><span class="ctl-ic">📍</span>
+          <select id="filter-state" title="Filter by state"></select>
+        </label>
+        <label class="ctl"><span class="ctl-ic">◉</span>
+          <select id="filter-status" title="Filter by status">
+            <option value="">All statuses</option>
+            <option>New</option><option>Contacted</option><option>Responded</option>
+            <option>Qualified</option><option>Not interested</option>
+          </select>
+        </label>
+      </div>
+      <div id="lead-list" class="lead-list"></div>
+      <div class="pager">
+        <div class="pager-info">
+          <span id="pager-range"></span>
+          <label class="page-size-label">Show
+            <select id="page-size">
+              <option>25</option><option>50</option><option>100</option><option>200</option>
+            </select>
+          </label>
+        </div>
+        <div class="pager-nav">
+          <button id="pager-first" class="pager-btn" title="First page">«</button>
+          <button id="pager-prev" class="pager-btn" title="Previous page">‹ Prev</button>
+          <span id="pager-page" class="pager-page"></span>
+          <button id="pager-next" class="pager-btn" title="Next page">Next ›</button>
+          <button id="pager-last" class="pager-btn" title="Last page">»</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="detail-pane" id="detail-pane">
+      <div class="splitter" id="splitter" title="Drag to resize · double-click to reset"></div>
+      <div class="detail-empty" id="detail-empty">
+        <div class="empty-art">📬</div>
+        <p>Select a lead to read it here</p>
+      </div>
+      <div id="detail" class="detail hidden"></div>
+    </section>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<!-- ============ MODAL (import / remove) ============ -->
+<div id="modal-backdrop" class="modal-backdrop hidden">
+  <div class="modal">
+    <h3 id="modal-title">Import leads</h3>
+    <div id="modal-body"></div>
+  </div>
+</div>
+
+<script src="app.js?v=14"></script>
+</body>
+</html>
