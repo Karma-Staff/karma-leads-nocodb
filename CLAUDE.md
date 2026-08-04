@@ -36,8 +36,11 @@ SQLite file mid-write. That is the entire reason the split existed.
 `how-it-works.html` is the illustrated architecture walkthrough. It also carries
 **"Building one of these"** — a phase-by-phase technical guide aimed at an
 intermediate data scientist, covering the reasoning behind each design decision
-and what the project got wrong first — and a **Timeline** of the project's
-history. **Add a timeline entry whenever you ship something notable.**
+and what the project got wrong first — **"Going live"**, which costs out hosting
+for ~50 daily users and specifies admin vs user mode — and a **Timeline** of the
+project's history. **Add a timeline entry whenever you ship something notable.**
+`dashboard/README.md` is the team-facing guide and is deliberately kept short:
+put the reasoning in `how-it-works.html` and the instructions in the README.
 
 **The running system is not in this repo.** NocoDB, its SQLite database, and the
 front end live in `C:\Users\David\karma-leads-nocodb\` — outside OneDrive on
@@ -51,8 +54,18 @@ change the UI.
 cd C:\Users\David\karma-leads-nocodb && node index.js     # or start-dashboard.bat
 # http://localhost:8080/app  = team UI   |  /dashboard = NocoDB admin UI
 
-# rebuild the whole base from the source files — DESTRUCTIVE, see below
+# refresh from the source files WITHOUT dropping anything — the everyday path
+python dashboard/sync.py --dry-run
+python dashboard/sync.py
+
+# rebuild the whole base from the source files — DESTRUCTIVE, see below.
+# Only needed for schema changes now; work product is carried across via the
+# identity registry, but row ids, views and invitations are still recreated.
 python dashboard/setup_v2.py
+
+# inspect the identity registry, or explain one lead code
+python dashboard/registry.py
+python dashboard/registry.py KL-7QX4M2H8ZB
 ```
 
 Requires the server already running on :8080 and the API token at
@@ -78,8 +91,10 @@ Two files, one chain — `setup_and_import.py` is the v1 single-table importer b
    hardcoded file→parser→category manifest; **adding a source file means adding a
    line there**, reusing an existing parser if the columns match.
 2. **Split + dedupe** (`setup_v2.py`) — `Source == "Job board"` → jobs; a row whose
-   `Lead` differs from its `Company` → people; everything else → companies. Dedupe
-   keys email → phone → name+city, merging non-empty fields into the kept row.
+   `Lead` differs from its `Company` → people; everything else → companies.
+   `dedupe()` unions rows that agree on **any** key, merging non-empty fields into
+   the kept row. See "Dedupe: franchises are not duplicates" below — it is not a
+   ladder any more, and the guards are load-bearing.
 3. **Create + link** — five tables (Companies, People, Job Board, Segments,
    Blocklist). People and jobs attach to companies by `norm_co()` name match
    (suffixes like llc/inc stripped); Segments are Category × State and power
@@ -93,6 +108,118 @@ than reinvented: `clean`, `clean_place` (drops purely-numeric Bitrix ID codes),
 `clean_phone` (strips the leading apostrophe), `to_int`, `trade_label` (readable
 trade or `None` — filters bare licence codes like `HIC`/`CGC`/`B`), `cert_count`,
 `file_date`.
+
+## Lead identity (`dashboard/registry.py`, `lead_registry.db`)
+
+**`noco.db` is now a projection. `lead_registry.db` is the system of record.**
+
+Every lead carries a **Lead Code** — `KL-7QX4M2H8ZB`, Crockford base32, opaque on
+purpose. It is a surrogate key: it encodes no phone number, no name, no row id
+and no entity type, because a key derived from the data breaks the moment the
+data is corrected. Entity type lives in a *column*, so a lead can move between
+Companies and People (a source changing its mind about whether `Lead` differs
+from `Company`) without orphaning its identity.
+
+```
+lead        lead_code PK, entity_type, first_seen, last_seen, merged_into
+lead_key    (entity_type, key_type, key_value) PK -> lead_code
+lead_work   lead_code PK, status, owner, favorite, removed, notes
+lead_note   record comments, keyed by lead_code
+```
+
+`resolve()` matches each dedupe cluster to its existing code through `lead_key`,
+which remembers **every natural key the lead ever arrived on**. Three outcomes:
+no match mints a code, one match reuses it, several matches mean a previously
+split business has been recognised as one — the oldest code wins and the others
+are **tombstoned via `merged_into`, never deleted**, so an old code in a URL still
+resolves. Measured on the real corpus: a 15,638-row export landing on an existing
+19,145-row base left 17,374 of 17,382 codes untouched.
+
+Things that are load-bearing and were each found by a failing test:
+
+- **`entity_type` is part of the key, not a tag on it.** A contact shares their
+  employer's phone, so `('phone', 2125551000)` names both a company and a person.
+  Unscoped, the person inherited the company's code and stole the key; 243 of
+  32,887 company codes drifted on the second run.
+- **Key registration is `INSERT OR IGNORE`, never overwrite.** If a key already
+  belongs to another live code, that cluster claimed it first; stealing it makes
+  both identities churn forever.
+- **`keysets_for()` numbers a cluster whose every key is already taken.** Nine
+  SERVPRO franchises share one manager's email and our guards *correctly* refuse
+  to merge them — but then eight of them can never find themselves again and mint
+  a fresh code every run, silently leaking work product. Same for contactless
+  namesakes and the two rows with no indexable name.
+- **`save_work()`/`save_notes()` follow `merged_into`**, so a browser holding a
+  tombstoned code cannot strand the team's work on a dead identity.
+
+`setup_v2.py` now harvests work product into the registry **before** deleting the
+base and replays it on insert. Parsed files win on facts (phone, city, employees);
+the registry wins on judgement (status, owner, favourite, notes) — nothing in a
+spreadsheet knows a lead was already qualified.
+
+**Back the registry up somewhere that is not this folder.** `noco.db` can be
+rebuilt from the source files; the codes cannot. `setup_v2.py` and `sync.py`
+snapshot it to `lead_registry.db.bak-*` before writing, but that is beside it on
+the same disk.
+
+## Refreshing without a rebuild (`dashboard/sync.py`)
+
+```bash
+python dashboard/sync.py --dry-run      # always first; prints the plan
+python dashboard/sync.py [--limit N]
+```
+
+The everyday path. Same files, same clusters, same codes, then: new code →
+INSERT, known code → PATCH **only the fields that actually changed**, code absent
+from the files → **left alone, never deleted**. A lead vanishing from an export
+means the export changed, not that the business closed, and someone may have
+spent a week working it — removal is a human decision made with the 🚫 button.
+A blank in a file never blanks a populated cell, so a thinner export cannot strip
+detail an earlier one supplied. Status/Owner/Favorite/Notes are never written.
+
+`setup_v2.py` remains the only way to change the *schema*, and is still
+destructive — but it is no longer the only way to get new data in, which is what
+made it dangerous.
+
+## Dedupe: franchises are not duplicates
+
+`dedupe()` in `setup_v2.py` (ported to `import-leads.js`) unions rows that agree
+on **any** key. It used to pick one key per row — email, else phone, else
+name+city — which meant a phone-only export could never meet an email-only one
+however much they overlapped: `Vendor Leads 1216.csv` carries no email at all so
+every row keyed on phone, while `Bitrix Vendor Leads 1007` keyed 100% on email.
+Those two files could not collide *by construction*.
+
+Unioning on any key alone would have been worse, because the obvious keys lie:
+
+- **Email is not identity.** `t.braun@servpro.com` — one regional manager — sits
+  on nine separate SERVPRO franchises with nine different phone numbers. The old
+  ladder keyed all nine on that email and collapsed them into one row, erasing
+  eight real businesses. An email match now also needs the **names to agree** and
+  the **cities not to conflict**.
+- **Phone is the strongest signal, but gets mistyped.** `Willies Shoe Repair` and
+  `Williams Wooden Floor Company` share a number in the source. A phone match is
+  refused when the names *and* the emails both disagree.
+- **Name+city needs a real city**, and yields to a phone disagreement — two
+  branches in one town are two businesses — *unless* the source itself said
+  "X DBA Y".
+
+`aliases()` is why the master sheet ever meets the Bitrix exports: the master
+lists the franchisee's legal entity (`Arma Hawk, Llc / Dba Servpro Of
+Alexandria`), the vendor files list the trading name (`ServPro of Alexandria`).
+Splitting on DBA indexes both halves. Names that normalise to a bare trade word
+are dropped (`GENERIC`) — `norm_co()` strips `pc` wherever it appears, so
+"Pc Restorations" comes back as "restorations", which would match half the
+industry.
+
+`phone_key()` is now the single implementation of the Bitrix-placeholder
+rejection; the `pk(r)` inside `main()` delegates to it. Dedupe uses it too, so
+`+119000000000`-style fillers no longer merge unrelated companies (they used to,
+via `phone_digits`, along with 7-digit fragments — 69 rows silently lost).
+
+When changing any of this, re-check the counts per brand
+(`stanley steemer`, `servpro`, `puroclean`, `rainbow international`): a drop
+means franchises are being eaten.
 
 ## Do-not-call imports (`dashboard/import_dnc.py`)
 
@@ -110,8 +237,8 @@ skipped, so a fresh monthly export only applies the difference. Always
 Applied 2026-08-03 from `dnc/DNC(Sheet1).csv` (Zoho export, cp1252): 531 usable
 numbers of 756 rows, removing 229 companies and 22 people.
 
-Note this file carries a **third copy of `pk()`** alongside `setup_v2.py` and
-`import-leads.js`. All three must stay in step.
+Note this file carries a **third copy of `pk()`** alongside `phone_key()` in
+`setup_v2.py` and `pk()` in `import-leads.js`. All three must stay in step.
 
 ## The front end (`C:\Users\David\karma-leads-nocodb\public\`)
 
@@ -224,10 +351,12 @@ bulk-inserts using the *caller's* JWT rather than the API token, so NocoDB
 permissions still apply.
 
 It is a deliberate port of `dashboard/setup_v2.py` — same `pk()` phone-key
-rejections, same email → phone → name+city dedupe ladder, same blocklist behaviour.
-**Change one and change the other**, or an import and a rebuild will disagree about
-where a row belongs. Before inserting it scans existing `Email` + `Phone Key` values
-across the three tables to skip leads already in the base; the scan stops at
+rejections, same `aliases()` / any-key union and the same three guards, same
+blocklist behaviour. **Change one and change the other**, or an import and a
+rebuild will disagree about where a row belongs. Before inserting it scans
+existing records across the three tables to skip leads already in the base — it
+reads `Email`, `Phone Key`, `Company`, `Name` and `City`, because a bare key
+match is not enough to call two rows the same business. The scan stops at
 `SCAN_CAP` rows and reports `partialDedupe` rather than grinding forever.
 
 ## LinkedIn job search (`karma-leads-nocodb\job-search.js`)
@@ -322,6 +451,17 @@ display titles the API uses (`Source File`).
   count instead.
 - State naming is inconsistent across sources (`FL` vs `Florida`), which splits
   segments. The UI works around it; the data is still split.
+- **Roughly a fifth of States are inferred, not sourced.** The Bitrix exports put
+  unresolved picklist IDs (`7318`) in the State column, which `clean_place()`
+  drops — `Vendor Leads 1216.csv` arrived with 15,638 rows and no state at all.
+  `backfill_states()` in `setup_and_import.py` fills a blank State from the row's
+  own city (a city that resolves to one state 90%+ of the time in this corpus),
+  else from the geographic NANP area code in `AREA_STATE`. Measured on a 30%
+  holdout of the rows that do carry a state: **86% coverage at 96% accuracy** —
+  so expect roughly one inferred state in twenty-five to be wrong, usually a
+  national company whose number is a head-office line. City is tried first
+  because it is the row's own location field; the phone may be a mobile.
+  It runs at the end of `collect()`, so it applies to every rebuild.
 - One business can appear twice across sources when phones differ — dedupe falls
   through to company+city. Shows up as a company listed under its own "Similar
   companies".

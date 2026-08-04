@@ -13,6 +13,14 @@ noco.db-shm
 noco.db-wal
 *.db
 
+# lead_registry.db maps every lead to its permanent Lead Code. It is the ONE
+# thing here that cannot be regenerated: noco.db can be rebuilt from the source
+# files, but the codes — and the statuses, owners and notes hanging off them —
+# only exist in the registry. Keep a backup somewhere that is not this folder.
+# setup_v2.py and sync.py snapshot it to lead_registry.db.bak-* before writing.
+lead_registry.db*
+*.db.bak-*
+
 # recents.json is the per-account activity trail behind the Recent tab — real
 # staff emails and the leads they looked at.
 recents.json

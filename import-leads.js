@@ -48,11 +48,6 @@ const certCount = (v) => {
   const n = s.split(";").filter((p) => p.trim()).length;
   return n || null;
 };
-const phoneDigits = (s) => {
-  if (!s) return null;
-  const d = String(s).replace(/\D/g, "");
-  return d.length < 7 ? null : d.slice(-10);
-};
 /* Bannable phone key, or null — same rejections as pk() in setup_v2.py:
    Bitrix placeholders like +119000000000 are shared by dozens of unrelated
    companies, so they must never become a key. */
@@ -179,14 +174,60 @@ function rowToLead(row, map, phoneCols) {
   };
 }
 
-/* same dedupe key ladder as setup_v2.py: email -> phone -> name + city */
-function dedupeKey(l) {
-  if (l.email) return "e:" + l.email;
-  const p = phoneDigits(l.phone);
-  if (p) return "p:" + p;
-  const n = l.company || l.name;
-  return n ? `n:${n.toLowerCase()}|${(l.city || "").toLowerCase()}` : null;
+/* ---- identity matching: the port of dedupe()/aliases() in setup_v2.py ----
+   Keep the two in step. A lead is the same business as another when they agree
+   on a key AND nothing contradicts it — franchises share brands, share a
+   regional manager's email, and are still separate businesses. */
+const SUFFIXES = new Set(["llc", "inc", "co", "corp", "ltd", "llp", "pc", "pa",
+  "the", "company", "corporation", "incorporated"]);
+/* a trade word alone names half the industry — never merge two rows on it */
+const GENERIC = new Set(["restoration", "restorations", "cleaning", "cleaners",
+  "construction", "services", "service", "roofing", "adjusters", "adjuster",
+  "plumbing", "contracting", "contractors", "builders", "remodeling", "damage",
+  "emergency", "recovery", "mitigation", "environmental", "disaster"]);
+const DBA = /\bd\s*[/.]?\s*b\s*[/.]?\s*a\b\.?/i;
+
+function normCo(name) {
+  if (!name) return null;
+  const words = String(name).toLowerCase().replace(/[^a-z0-9 ]+/g, " ")
+    .split(/\s+/).filter((w) => w && !SUFFIXES.has(w));
+  return words.join(" ") || null;
 }
+
+/* 'Brc Construction, Inc. Dba Pc Restorations' -> both halves plus the whole,
+   so it can meet a bare 'PC Restorations' from another export. */
+function aliases(name) {
+  if (!name) return { set: new Set(), isDba: false };
+  const parts = String(name).split(DBA);
+  const isDba = parts.length > 1;
+  const out = new Set([normCo(isDba ? parts.join(" ") : name)]);
+  if (isDba) for (const p of parts) out.add(normCo(p));
+  return {
+    set: new Set([...out].filter((a) => a && !GENERIC.has(a))),
+    isDba,
+  };
+}
+
+const disjoint = (a, b) => a.size && b.size && ![...a].some((x) => b.has(x));
+
+/* identity of a lead, precomputed once */
+function ident(l, name) {
+  return {
+    email: (l.email || "").trim().toLowerCase() || null,
+    phone: pk(l.phone),
+    city: (l.city || "").trim().toLowerCase() || null,
+    ...aliases(name !== undefined ? name : (l.company || l.name)),
+  };
+}
+
+/* Would merging these two erase a real business? */
+const phoneAgrees = (a, b) =>
+  !((a.email && b.email && a.email !== b.email) && disjoint(a.set, b.set));
+const emailAgrees = (a, b) =>
+  !disjoint(a.set, b.set) && !(a.city && b.city && a.city !== b.city);
+const nameAgrees = (a, b) =>
+  !(a.email && b.email && a.email !== b.email) &&
+  !(a.phone && b.phone && a.phone !== b.phone && !(a.isDba || b.isDba));
 
 /* ---------------- NocoDB access (as the signed-in user, not the API token) */
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -228,18 +269,32 @@ async function discover(auth) {
 }
 
 /* every email + phone key already in the base, so an import can't re-add them */
+/* Index the base by email and by phone key. The names and cities come along
+   because a bare key match is not enough to call two rows the same business —
+   see the guards above. */
 async function existingKeys(auth, tables) {
-  const emails = new Set(), phones = new Set();
+  const emails = new Map(), phones = new Map();
+  const FIELDS = "Email,Phone Key,Company,Name,City";
   let scanned = 0, complete = true;
   for (const tid of [tables.companies, tables.people, tables.jobs]) {
     if (!tid) continue;
     for (let offset = 0; ; offset += PAGE) {
       if (scanned >= SCAN_CAP) { complete = false; break; }
       const r = await nc(auth, `/api/v2/tables/${tid}/records` +
-        `?limit=${PAGE}&offset=${offset}&fields=${encodeURIComponent("Email,Phone Key")}`);
+        `?limit=${PAGE}&offset=${offset}&fields=${encodeURIComponent(FIELDS)}`);
       for (const row of r.list || []) {
-        if (row.Email) emails.add(String(row.Email).toLowerCase());
-        if (row["Phone Key"]) phones.add(row["Phone Key"]);
+        const id = ident({
+          email: row.Email, city: row.City,
+        }, row.Company || row.Name);
+        id.phone = row["Phone Key"] || null;
+        if (id.email) {
+          if (!emails.has(id.email)) emails.set(id.email, []);
+          emails.get(id.email).push(id);
+        }
+        if (id.phone) {
+          if (!phones.has(id.phone)) phones.set(id.phone, []);
+          phones.get(id.phone).push(id);
+        }
       }
       scanned += (r.list || []).length;
       if (!r.list || r.list.length < PAGE || r.pageInfo?.isLastPage) break;
@@ -297,18 +352,38 @@ async function importLeads({ buffer, filename, category, auth }) {
   const tables = await discover(auth);
   const banned = await bannedNumbers(auth, tables);
   const { emails, phones, complete } = await existingKeys(auth, tables);
-  const seen = new Set();
   let duplicates = 0, blocked = 0;
   const fresh = [];
+  const keptByEmail = new Map(), keptByPhone = new Map(), keptByAlias = new Map();
+  const push = (map, k, v) => {
+    if (!k) return;
+    if (!map.has(k)) map.set(k, []);
+    map.get(k).push(v);
+  };
+
   for (const l of leads) {
-    const key = dedupeKey(l);
-    const p = phoneDigits(l.phone);
-    if ((key && seen.has(key)) ||
-        (l.email && emails.has(l.email)) || (p && phones.has(p))) {
-      duplicates++;
-      continue;
+    const id = ident(l);
+    // already in the base?
+    const inBase =
+      (id.phone && (phones.get(id.phone) || []).some((o) => phoneAgrees(id, o))) ||
+      (id.email && (emails.get(id.email) || []).some((o) => emailAgrees(id, o)));
+    // already seen earlier in this same file?
+    let dupOfFile = false;
+    if (!inBase) {
+      dupOfFile =
+        (id.phone && (keptByPhone.get(id.phone) || []).some((o) => phoneAgrees(id, o))) ||
+        (id.email && (keptByEmail.get(id.email) || []).some((o) => emailAgrees(id, o)));
+      if (!dupOfFile && id.city) {
+        for (const a of id.set) {
+          const bucket = keptByAlias.get(`${a}|${id.city}`) || [];
+          if (bucket.some((o) => nameAgrees(id, o))) { dupOfFile = true; break; }
+        }
+      }
     }
-    if (key) seen.add(key);
+    if (inBase || dupOfFile) { duplicates++; continue; }
+    push(keptByEmail, id.email, id);
+    push(keptByPhone, id.phone, id);
+    if (id.city) for (const a of id.set) push(keptByAlias, `${a}|${id.city}`, id);
     fresh.push(l);
   }
 

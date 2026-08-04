@@ -209,6 +209,7 @@
   <a href="#big-picture">The big picture</a>
   <a href="#where">Where everything lives</a>
   <a href="#model">The data model</a>
+  <a href="#model-identity" class="sub">Lead codes &amp; the registry</a>
   <a href="#frontend">The front end</a>
   <a href="#frontend-boot" class="sub">Booting &amp; discovery</a>
   <a href="#frontend-stats" class="sub">The KPI row</a>
@@ -231,6 +232,10 @@
   <a href="#build-ui" class="sub">6 · The interface</a>
   <a href="#build-enrich" class="sub">7 · Paid enrichment</a>
   <a href="#build-ops" class="sub">8 · Operations</a>
+  <a href="#deploy">Going live</a>
+  <a href="#deploy-breaks" class="sub">What breaks</a>
+  <a href="#deploy-roles" class="sub">Admin &amp; user mode</a>
+  <a href="#deploy-cost" class="sub">What it costs</a>
   <a href="#timeline">Timeline</a>
   <a href="#files">File map</a>
 </nav>
@@ -377,16 +382,52 @@ app.use(await Noco.init({}, httpServer, app));   <span class="cmt">// 3-arg form
 
 <table>
   <tr><th>Table</th><th class="num">Rows</th><th>Primary value</th><th>Links</th></tr>
-  <tr><td><b>Companies</b></td><td class="num">32,913</td><td><code>Company</code></td>
+  <tr><td><b>Companies</b></td><td class="num">32,888</td><td><code>Company</code></td>
       <td><code>People here</code>, <code>Job postings</code>, <code>Similar companies</code></td></tr>
-  <tr><td><b>People</b></td><td class="num">2,328</td><td><code>Name</code></td>
+  <tr><td><b>People</b></td><td class="num">2,305</td><td><code>Name</code></td>
       <td><code>Company record</code></td></tr>
-  <tr><td><b>Job Board</b></td><td class="num">85</td><td><code>Job Title</code></td>
+  <tr><td><b>Job Board</b></td><td class="num">84</td><td><code>Job Title</code></td>
       <td><code>Company record</code></td></tr>
-  <tr><td><b>Segments</b></td><td class="num">202</td><td><code>Segment</code></td>
+  <tr><td><b>Segments</b></td><td class="num">225</td><td><code>Segment</code></td>
       <td><code>Companies</code></td></tr>
-  <tr><td><b>Blocklist</b></td><td class="num">—</td><td><code>Phone</code></td><td>—</td></tr>
+  <tr><td><b>Blocklist</b></td><td class="num">531</td><td><code>Phone</code></td><td>—</td></tr>
 </table>
+
+<h3 id="model-identity">The sixth table isn't in NocoDB</h3>
+<p>
+  Every lead carries a <b>Lead Code</b> — <code>KL-6KS2GV1FR4</code> — and the
+  mapping lives in a separate SQLite file,
+  <span class="file">lead_registry.db</span>, outside the base entirely. That
+  inversion is the point: <strong><span class="file">noco.db</span> is now a
+  projection, and the registry is the system of record.</strong>
+</p>
+<table>
+  <tr><th>Table</th><th>Holds</th></tr>
+  <tr><td><code>lead</code></td>
+      <td><code>lead_code</code> (PK), entity type, first/last seen,
+          <code>merged_into</code></td></tr>
+  <tr><td><code>lead_key</code></td>
+      <td>(entity type, key type, key value) → <code>lead_code</code> — every
+          natural key a lead ever arrived on</td></tr>
+  <tr><td><code>lead_work</code></td>
+      <td>status, owner, favourite, notes — the team's judgement</td></tr>
+  <tr><td><code>lead_note</code></td>
+      <td>record comments, keyed by code rather than row id</td></tr>
+</table>
+<p>
+  The code is deliberately opaque. It is Crockford base32 — no I, L, O or U, so it
+  survives being read down a phone — and it encodes <em>nothing</em>: no name, no
+  phone number, no row id, not even the entity type. A key made of data breaks the
+  moment the data is corrected, which is the entire reason surrogate keys exist.
+  Entity type lives in a column precisely because a lead can move between Companies
+  and People when a source changes its mind about whether <code>Lead</code> differs
+  from <code>Company</code>; baked into the key, that move would orphan the identity.
+</p>
+<div class="note">
+  When two codes turn out to be one business, the older survives and the other is
+  <strong>tombstoned via <code>merged_into</code>, never deleted</strong> — so a code
+  someone pasted into a URL or a spreadsheet six months ago still resolves.
+</div>
 
 <h3>How "similar companies" works</h3>
 <p>
@@ -697,11 +738,37 @@ app.use(await Noco.init({}, httpServer, app));   <span class="cmt">// 3-arg form
 <!-- ============================================================ -->
 <h2 id="import">Getting data in</h2>
 <p>
-  Three paths. The first two must agree with each other: both decide where a row
-  belongs, what its phone key is, and whether it's a duplicate — using the same
-  rules, implemented twice in two languages. The third only ever writes job
-  postings, so it plays by its own dedupe rules.
+  Four paths. Three of them must agree with each other: they each decide where a row
+  belongs, what its phone key is, and whether it's a duplicate — using the same rules,
+  implemented twice in two languages. The job search only ever writes job postings, so
+  it plays by its own dedupe rules.
 </p>
+<table>
+  <tr><th>Path</th><th>Use it for</th><th>Destructive?</th></tr>
+  <tr><td><b>A</b> — <span class="file">setup_v2.py</span></td>
+      <td>changing the <em>structure</em> of the tables</td>
+      <td>yes — recreates the base</td></tr>
+  <tr><td><b>A′</b> — <span class="file">sync.py</span></td>
+      <td>refreshing from the source files. <b>The everyday path.</b></td>
+      <td>no — never deletes</td></tr>
+  <tr><td><b>B</b> — the drop zone</td><td>one-off spreadsheets</td><td>no</td></tr>
+  <tr><td><b>C</b> — 🔎 Find jobs</td><td>fresh LinkedIn postings</td><td>no</td></tr>
+</table>
+<p>
+  Path A′ is the one that changed the character of this project. It reads the same
+  files, forms the same clusters, resolves the same lead codes, then reconciles:
+  <b>new code → insert, known code → update only the fields that actually changed,
+  code absent from the files → left alone.</b> A blank in a file never blanks a
+  populated cell, so a thinner export cannot strip detail a richer one supplied, and
+  Status/Owner/Favourite/Notes are never written — a spreadsheet has no opinion about
+  whether you have qualified someone.
+</p>
+<div class="note">
+  <strong>Nothing is ever deleted, deliberately.</strong> A lead vanishing from an
+  export means the export changed, not that the business closed — and someone may
+  have spent a week working it. Removal is a decision a human makes with the 🚫
+  button. It is not something a refresh should infer.
+</div>
 
 <div class="danger">
   <strong>Change one, change the other.</strong>
@@ -899,21 +966,62 @@ else                                  → Companies</code></pre>
 </p>
 
 <h3 id="alg-dedupe">2 · Is this a duplicate?</h3>
-<p>A ladder, first match wins:</p>
-<ol>
-  <li><b>Email</b> (lowercased) — trustworthy, used whenever present</li>
-  <li><b>Phone</b> — last 10 digits, needs ≥7 digits</li>
-  <li><b>Name + city</b> — the fallback when there's no contact detail at all</li>
-</ol>
 <p>
-  Within a rebuild, later rows merge their non-empty fields into the kept row, so a
-  sparse record can be filled in by a richer one. On import, a matching row is simply
-  skipped and counted.
+  This used to be a ladder — email, else phone, else name+city, first match wins.
+  That was wrong in <em>both</em> directions at once, and finding out why is the most
+  interesting thing in this document.
+</p>
+<p>
+  <b>Too strict.</b> Each row picked <em>one</em> key. <span class="file">Vendor Leads
+  1216.csv</span> carries no email column at all, so all 15,638 of its rows keyed on
+  phone; <span class="file">Bitrix Vendor Leads 1007</span> keyed 100% on email. Those
+  two files could never collide <em>by construction</em>, however much they overlapped.
+</p>
+<p>
+  <b>Too loose.</b> Email was treated as identity. But
+  <code>t.braun@servpro.com</code> — one regional manager — sits on <b>nine separate
+  SERVPRO franchises</b> with nine different phone numbers. The ladder keyed all nine
+  on that address and collapsed them into a single row, erasing eight real businesses.
+  Separately, <code>phone_digits</code> accepted 7-digit fragments and Bitrix
+  placeholders as keys, silently losing another 69 rows.
+</p>
+<p>
+  It now <b>unions on any agreeing key</b>, with three guards. The guards are the
+  whole design: <strong>franchises are not duplicates.</strong>
+</p>
+<table>
+  <tr><th>Key</th><th>Merges when…</th><th>…unless</th></tr>
+  <tr><td><b>Phone</b></td><td>always — strongest signal</td>
+      <td>the names <em>and</em> emails both disagree. A number mistyped onto someone
+          else's row is the one way a phone lies —
+          <code>Willies Shoe Repair</code> and <code>Williams Wooden Floor Company</code>
+          share one in the source.</td></tr>
+  <tr><td><b>Email</b></td><td>the names also agree</td>
+      <td>the cities conflict. Same brand, two towns, two branches.</td></tr>
+  <tr><td><b>Name + city</b></td><td>there is a real city</td>
+      <td>the phones disagree — <em>unless</em> the source itself said “X DBA Y”.</td></tr>
+</table>
+<p>
+  <code>aliases()</code> is what finally lets the master sheet meet the vendor files.
+  The master lists the franchisee's legal entity
+  (<code>Arma Hawk, Llc / Dba Servpro Of Alexandria</code>); the Bitrix exports list
+  the trading name (<code>ServPro of Alexandria</code>). Splitting on DBA indexes both
+  halves. Names that normalise to a bare trade word are dropped — <code>norm_co()</code>
+  strips <code>pc</code> wherever it appears, so “Pc Restorations” comes back as
+  “restorations”, which would match half the industry.
 </p>
 <div class="note">
-  This is why one business can legitimately appear twice: two sources, two different
-  phone numbers, no email. The dedupe never sees them as the same record. It shows up
-  as a company listed under its own "Similar companies".
+  <strong>The net effect on the count was 48 rows.</strong> That is the honest
+  headline, and it is nearly nothing. What actually changed is <em>which</em> rows:
+  198 true duplicates went away and 150 real businesses came back. The total barely
+  moved and is now made of the right records.
+</div>
+<div class="note">
+  One business can still legitimately appear twice: same name, same city, two different
+  valid phones, no DBA evidence. <code>RAM Restoration</code> in Grand Rapids is in
+  there twice from two Apollo exports. That is the guard working as designed — it errs
+  toward keeping, because the cost of wrongly merging two franchises is higher than the
+  cost of one visible duplicate. Base-wide that residual is 117 groups / 133 rows (0.4%).
 </div>
 
 <h3 id="alg-pk">3 · Is this number bannable?</h3>
@@ -1291,6 +1399,128 @@ df.groupby(phone_key).size().sort_values(ascending=False).head(20)</code></pre>
 </div>
 
 <!-- ============================================================ -->
+<h2 id="deploy">Going live: hosting, roles and what it costs</h2>
+<p>
+  Everything above assumes one machine on a desk. Putting it in front of ~50 people
+  a day changes five things, in rough order of how quickly they bite.
+</p>
+
+<h3 id="deploy-breaks">What breaks the moment you deploy</h3>
+<ol>
+  <li>
+    <b>The port is hardcoded.</b> <span class="file">index.js</span> calls
+    <code>app.listen(8080)</code>. Render injects a <code>PORT</code> environment
+    variable and health-checks <em>that</em> port — this alone fails the deploy.
+    <code>app.listen(process.env.PORT || 8080)</code>.
+  </li>
+  <li>
+    <b>The filesystem is ephemeral</b> — the one that actually matters.
+    <span class="file">noco.db</span> and
+    <span class="file">lead_registry.db</span> are files on disk. On a standard
+    Render service <em>every deploy and every restart wipes them</em>. That takes
+    the database and the identity registry with it, and the registry is the one
+    thing here that cannot be regenerated. Two ways out, below.
+  </li>
+  <li>
+    <b>Secrets are files.</b> <span class="file">apify_token.json</span> and
+    <span class="file">api_token.json</span> are read with
+    <code>fs.readFileSync</code>, and both are gitignored — so neither exists in
+    the deployed container. They need an environment-variable path with a file
+    fallback. <span class="file">admin_credentials.json</span> already does this
+    correctly; copy that pattern.
+  </li>
+  <li>
+    <b>The Python importers have nowhere to run.</b> They read from a OneDrive
+    folder that does not exist on a server. Leave them local and point them at the
+    hosted API — the raw exports are real names, phone numbers and a do-not-call
+    list, and keeping them on one workstation instead of a hosted disk is a
+    feature.
+  </li>
+  <li>
+    <b>One thing that gets <em>better</em>:</b> hosting is HTTPS, so
+    <code>navigator.clipboard</code> works and the
+    <code>execCommand</code> fallback stops being load-bearing.
+  </li>
+</ol>
+
+<h3 id="deploy-roles">Admin mode and user mode</h3>
+<p>
+  Most of this already exists and is simply unused. NocoDB owns authentication and
+  roles, the front end signs in against it, and <span class="file">app.js</span>
+  already fetches <code>/api/v1/auth/user/me</code> into <code>S.me</code> — it just
+  never reads the roles it gets back. Record-level permissions are genuinely already
+  enforced, because both the app and the drop-zone import use the <em>caller's</em>
+  JWT rather than the API token.
+</p>
+<table>
+  <tr><th>Role</th><th>Sees</th></tr>
+  <tr><td><b>Owner / Creator</b> — admin</td>
+      <td>the NocoDB admin UI at <code>/dashboard</code>, spreadsheet import,
+          blocklist management, 🔎 Find jobs</td></tr>
+  <tr><td><b>Editor</b> — the team</td>
+      <td><code>/app</code>: work leads, set status, owner, notes, favourites</td></tr>
+  <tr><td><b>Commenter / Viewer</b></td><td>read-only</td></tr>
+</table>
+<div class="danger">
+  <strong>There is one real hole, and it is a budget leak.</strong>
+  <code>/app-api/job-search</code> checks only that a JWT exists — not what role
+  the caller holds — and then spends <em>your</em> Apify token at $5 per 1,000
+  results. With one user on localhost that is fine. With 50 logins it is an
+  uncapped spend that anyone can trigger. The fix is small:
+  <span class="file">recents.js</span> already shows the pattern — ask
+  <code>/api/v1/auth/user/me</code> with the caller's own JWT and reject non-admins.
+  Do it <strong>server-side</strong>; hiding the button in the front end is
+  cosmetics, not a control.
+</div>
+
+<h3 id="deploy-cost">What it costs</h3>
+<p>
+  Fifty <em>daily</em> users is perhaps 8–12 concurrent, and the whole dataset is
+  13 MB. The cost driver is NocoDB's own memory footprint, not your data — it idles
+  around 300–500 MB before serving anyone.
+</p>
+<table>
+  <tr><th></th><th>Lean — SQLite on a persistent disk</th><th>Safe — managed Postgres</th></tr>
+  <tr><td>Web service (2 GB)</td><td>$25</td><td>$25</td></tr>
+  <tr><td>Persistent disk (5 GB)</td><td>~$1</td><td>—</td></tr>
+  <tr><td>Postgres</td><td>—</td><td>~$20</td></tr>
+  <tr><td><b>Per month</b></td><td><b>~$26</b></td><td><b>~$45</b></td></tr>
+</table>
+<p>
+  Plus Apify, which is usage-based and should be admin-gated: a few searches a week
+  is roughly <b>$5–20/month</b>. Call the whole thing <b>$30–50/month</b>. Those
+  hosting figures move — check current pricing rather than trusting this table.
+</p>
+<ul>
+  <li><b>Don't use a free tier.</b> It sleeps after inactivity and the team eats
+      30-second cold starts all day.</li>
+  <li><b>512 MB is too tight</b> for NocoDB. 2 GB is the safe floor.</li>
+  <li><b>No licence cost.</b> Self-hosted NocoDB is unlimited users; only their
+      cloud charges per seat.</li>
+</ul>
+<div class="note">
+  <strong>Take the SQLite-plus-disk path.</strong> For this many users it is the
+  right engineering call rather than a compromise: the load is read-dominated and
+  well within SQLite's range, and it avoids migrating NocoDB's entire metadata
+  database to Postgres — the difference between an afternoon and a week. What you
+  accept: a single instance, ~30–60 seconds of downtime per deploy, and a disk that
+  is a single point of failure. Since <span class="file">lead_registry.db</span>
+  lives on it, turn on snapshots <em>and</em> pull a copy off-platform on a
+  schedule. Nothing in the app knows which database is underneath, so Postgres
+  stays available later.
+</div>
+<div class="danger">
+  <strong>One thing to decide deliberately rather than by accident.</strong> The
+  <span class="file">.gitignore</span> is careful that real names, phones, emails
+  and a do-not-call list never reach GitHub. Deploying puts that same data on
+  someone else's infrastructure behind a single password. That is a normal and
+  defensible thing to do — but it changes your exposure, and it is worth thinking
+  about enforced strong passwords or SSO, who genuinely needs Editor rather than
+  Viewer, how long the DNC list is retained, and what you would owe people if it
+  leaked.
+</div>
+
+<!-- ============================================================ -->
 <h2 id="timeline">Timeline</h2>
 <p>
   How the project actually got here, from the first pile of exports to the
@@ -1395,11 +1625,110 @@ df.groupby(phone_key).size().sort_values(ascending=False).head(20)</code></pre>
   </li>
   <li>
     <div class="when">2026-08-03 · 01:37</div>
-    <div class="what">Do-not-call list applied <span class="tag now">current</span></div>
+    <div class="what">Do-not-call list applied</div>
     <div class="why"><span class="file">import_dnc.py</span> takes a CRM
       suppression export and bans it in bulk. First run: 531 numbers from 756
       rows, removing 229 companies and 22 people. State names also stopped being
       abbreviated anywhere on screen.</div>
+  </li>
+  <li>
+    <div class="when">2026-08-04</div>
+    <div class="what">Dedupe stops eating franchises <span class="tag">data quality</span></div>
+    <div class="why">A question — why did the base go from 12k leads to 32k? —
+      turned out to have a dull answer and an interesting one. The dull answer:
+      two files, <span class="file">Vendor Leads 1216.csv</span> (15,632) and the
+      master sheet (8,695), and the rows are genuinely new. The interesting one:
+      the dedupe was wrong in both directions at once. It picked <em>one</em> key
+      per row — email, else phone, else name+city — so a phone-only export could
+      never meet an email-only one, while at the same time one regional
+      manager's address, <code>t.braun@servpro.com</code>, was collapsing nine
+      separate SERVPRO franchises into a single row. Now it unions on any
+      agreeing key and guards each one: email needs the names to agree too,
+      phone yields when names and emails both disagree, name+city yields to a
+      phone conflict unless the source said "X DBA Y". That last part is what
+      finally lets the master sheet's legal entities meet the vendor files'
+      trading names. Net effect on the count is small — 48 rows — but that
+      nets off 150 real businesses coming back against 198 true duplicates
+      going away, which is the whole point: the total barely moved, and it is
+      now made of the right rows.</div>
+  </li>
+  <li>
+    <div class="when">2026-08-04</div>
+    <div class="what">Two thirds of the base gets its state back
+      <span class="tag">data quality</span></div>
+    <div class="why">The same investigation turned up a quieter problem: 68% of
+      companies had no State. The Bitrix exports put unresolved picklist IDs
+      (<code>7318</code>) in that column and <span class="file">clean_place()</span>
+      drops them, so <span class="file">Vendor Leads 1216.csv</span> — 15,638
+      rows, nearly half the base — was invisible to the state filter and sat in
+      a blank-state segment. <span class="file">backfill_states()</span> fills it
+      from the row's own city where that city means one state in this corpus,
+      and otherwise from the geographic NANP area code. City goes first because
+      it is the row's own location field, where the phone may be a mobile or a
+      head-office line. Blank states fell from 68% to 5%. It is inference, not
+      data: measured against a held-out 30% of the rows that <em>do</em> carry a
+      state, it covers 86% of them and gets 96% right.</div>
+  </li>
+  <li>
+    <div class="when">2026-08-04</div>
+    <div class="what">Leads get a permanent code
+      <span class="tag">architecture</span></div>
+    <div class="why">The question "was that dedupe work worth it?" had an
+      uncomfortable answer: not really — but it exposed something that was.
+      <span class="file">setup_v2.py</span> drops the base and recreates it, and
+      NocoDB row ids are positional, so every rebuild renumbered every lead.
+      Statuses, owners and notes were destroyed, <span class="file">recents.json</span>
+      silently pointed at <em>different</em> companies, and every deep link went
+      stale. Fixing a data bug and keeping the team's work were mutually
+      exclusive — and the only reason that had never hurt was that nobody had
+      done any work yet. The trap was closing quietly.
+      <br><br>
+      So every lead now carries a <strong>Lead Code</strong> —
+      <code>KL-7QX4M2H8ZB</code>, opaque on purpose, encoding no name, no phone
+      and no row number, because a key made of data breaks the moment the data is
+      corrected. A separate <span class="file">lead_registry.db</span> remembers
+      every natural key a lead ever arrived on, so a rebuild can find it again;
+      statuses, owners, favourites and notes hang off the code rather than the
+      row. When two codes turn out to be one business the older one survives and
+      the other is tombstoned, never deleted, so an old code in a URL still
+      resolves. <span class="file">sync.py</span> is the new everyday path: it
+      inserts what is new, updates only fields that actually changed, and
+      <em>never deletes</em> — a lead vanishing from an export means the export
+      changed, not that the business closed.
+      <br><br>
+      Three bugs surfaced only because the test asserted codes were byte-identical
+      across three consecutive runs. A contact shares their employer's phone
+      number, so people were inheriting company codes and stealing their keys —
+      243 codes drifted. Keys were being overwritten rather than left alone, so
+      two leads sharing one could churn forever. And the nine SERVPRO franchises
+      on one manager's email — the ones the dedupe guards correctly refuse to
+      merge — could never find themselves again afterwards, minting a fresh code
+      every run and leaking their work. Measured after the fixes: a 15,638-row
+      export landing on a 19,145-row base left 17,374 of 17,382 codes untouched,
+      and all work product survived.</div>
+  </li>
+  <li class="minor">
+    <div class="when">2026-08-04 · late</div>
+    <div class="what">44 MB → 13 MB, again <span class="tag">operations</span></div>
+    <div class="why">Three rebuilds in one afternoon left three orphaned bases and
+      their physical tables behind — the soft-delete behaviour from
+      <a href="#build-ops">phase 8</a>, recurring exactly as documented. Dropped and
+      <code>VACUUM</code>ed back to 13.3 MB. The lesson stands: this happens on
+      <em>every</em> <span class="file">setup_v2.py</span> run, which is one more
+      reason <span class="file">sync.py</span> is now the everyday path.
+      <span class="file">recents.json</span> was cleared too — row ids changed, and a
+      stale trail points at the wrong companies rather than at nothing.</div>
+  </li>
+  <li>
+    <div class="when">2026-08-04 · end</div>
+    <div class="what">Costed for 50 people <span class="tag now">current</span></div>
+    <div class="why">What it would take to stop being a thing on one desk — written
+      up under <a href="#deploy">Going live</a>. Short version: roughly
+      <b>$30–50/month</b> hosted, the roles largely exist already because NocoDB owns
+      authentication and the front end passes the caller's own token, and the one
+      genuine hole is that <code>/app-api/job-search</code> checks that you are signed
+      in but not <em>who you are</em> — so any of 50 logins could spend the Apify
+      budget. Nothing here is deployed yet; this is the plan, not the state.</div>
   </li>
 </ul>
 
@@ -1407,17 +1736,18 @@ df.groupby(phone_key).size().sort_values(ascending=False).head(20)</code></pre>
 <h2 id="files">File map</h2>
 <table>
   <tr><th>File</th><th>Lines</th><th>What it does</th></tr>
-  <tr><td><span class="file">karma-leads-nocodb/index.js</span></td><td class="num">108</td>
+  <tr><td><span class="file">karma-leads-nocodb/index.js</span></td><td class="num">126</td>
       <td>Serves <code>/app</code>, registers every <code>/app-api</code> route, starts NocoDB</td></tr>
-  <tr><td><span class="file">karma-leads-nocodb/import-leads.js</span></td><td class="num">375</td>
-      <td>Spreadsheet → parsed → deduped → inserted. Also exports the shared
+  <tr><td><span class="file">karma-leads-nocodb/import-leads.js</span></td><td class="num">450</td>
+      <td>Spreadsheet → parsed → deduped → inserted. Carries the JavaScript port of
+          <code>aliases()</code> and the three merge guards. Also exports the shared
           NocoDB helpers (<code>nc</code>, <code>discover</code>,
           <code>insertAll</code>) that the job search reuses</td></tr>
   <tr><td><span class="file">karma-leads-nocodb/job-search.js</span></td><td class="num">281</td>
       <td>Apify actor call, input whitelist, job dedupe, cost and credit reporting</td></tr>
   <tr><td><span class="file">karma-leads-nocodb/recents.js</span></td><td class="num">106</td>
       <td>Per-account activity trail behind the Recent tab</td></tr>
-  <tr><td><span class="file">karma-leads-nocodb/public/app.js</span></td><td class="num">1805</td>
+  <tr><td><span class="file">karma-leads-nocodb/public/app.js</span></td><td class="num">1917</td>
       <td>The whole front end</td></tr>
   <tr><td><span class="file">karma-leads-nocodb/public/app.css</span></td><td class="num">699</td>
       <td>Styling, light and dark, three row densities, the KPI row</td></tr>
@@ -1425,10 +1755,22 @@ df.groupby(phone_key).size().sort_values(ascending=False).head(20)</code></pre>
       <td>Shell markup — versioned asset links live here</td></tr>
   <tr><td><span class="file">karma-leads-nocodb/apify_token.json</span></td><td class="num">—</td>
       <td>Apify key. Server-side only; never served to the browser</td></tr>
-  <tr><td><span class="file">dashboard/setup_v2.py</span></td><td class="num">440</td>
-      <td>Destructive rebuild: split, link, segment, views</td></tr>
-  <tr><td><span class="file">dashboard/setup_and_import.py</span></td><td class="num">497</td>
-      <td>v1 importer, still the home of every file parser and cleaning helper</td></tr>
+  <tr><td><span class="file">dashboard/setup_v2.py</span></td><td class="num">878</td>
+      <td>Destructive rebuild: cluster, resolve codes, harvest work, split, link,
+          segment, views. Home of <code>cluster()</code>, <code>aliases()</code> and
+          <code>keysets_for()</code></td></tr>
+  <tr><td><span class="file">dashboard/sync.py</span></td><td class="num">225</td>
+      <td><b>The everyday path.</b> Non-destructive refresh: insert new, update
+          changed fields, never delete</td></tr>
+  <tr><td><span class="file">dashboard/registry.py</span></td><td class="num">397</td>
+      <td>Lead codes, the natural-key crosswalk, work product and notes.
+          Run it directly to inspect the registry or explain one code</td></tr>
+  <tr><td><span class="file">dashboard/setup_and_import.py</span></td><td class="num">602</td>
+      <td>v1 importer, still the home of every file parser, every cleaning helper,
+          and the state backfill</td></tr>
+  <tr><td><span class="file">lead_registry.db</span></td><td class="num">—</td>
+      <td><b>The system of record.</b> The only thing here that cannot be
+          regenerated — back it up off this machine</td></tr>
   <tr><td><span class="file">dashboard/nocodb_ids.json</span></td><td class="num">—</td>
       <td>Table/column ids, regenerated by each rebuild, read by the Python scripts</td></tr>
   <tr><td><span class="file">dashboard/blocklist.json</span></td><td class="num">—</td>
