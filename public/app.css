@@ -739,9 +739,14 @@ body.resizing .lead-row, body.resizing .splitter { pointer-events: none; }
 .user-you { color: var(--ink-2); font-size: 12px; }
 .user-sub { color: var(--ink-2); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .user-disabled .user-id { opacity: .5; }
-.user-role { font-size: 12.5px; }
-.user-add-row { display: flex; gap: 8px; margin-bottom: 4px; }
-.user-add-row input { flex: 1; padding: 7px 10px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface-2); }
+/* the generic .modal select rule is for stacked form fields — inside these
+   flex rows the controls must size to content, not span the modal */
+.user-row .user-role, .user-add-row select {
+  width: auto; flex: 0 0 auto; margin-top: 0; padding: 6px 9px; font-size: 12.5px;
+}
+.user-row .user-toggle { flex-shrink: 0; white-space: nowrap; }
+.user-add-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.user-add-row input { flex: 1; min-width: 0; margin-top: 0; padding: 7px 10px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface-2); }
 .modal-field { margin-top: 14px; }
 
 /* ---------- import drop zone ---------- */
