@@ -12,11 +12,19 @@ const app = express();
 
 /* same no-cache policy as the old server: revalidate, don't blind-serve — a
    half-cached app.js/index.html pair breaks the page and the round trip is
-   cheap on localhost */
-app.use("/app", express.static(path.join(__dirname, "..", "public"), {
+   cheap on localhost.
+
+   The app is served at BOTH / and /app: the root is the front door
+   (https://<host>/ just works), /app keeps years of bookmarks and the
+   health-check path alive. Assets are referenced relatively so the same
+   files work from either mount; /api, /dashboard and unknown paths fall
+   straight through the static handler to the routes below. */
+const statics = express.static(path.join(__dirname, "..", "public"), {
   etag: true,
   setHeaders: (res) => res.setHeader("Cache-Control", "no-cache"),
-}));
+});
+app.use("/app", statics);
+app.use("/", statics);
 
 /* the user-menu's "Open NocoDB admin" link — the admin container lives on
    its own port, so bounce the browser there against whatever host it used
@@ -56,4 +64,4 @@ app.use((err, req, res, next) => {         // eslint-disable-line no-unused-vars
 });
 
 app.listen(PORT, () =>
-  console.log(`Karma Leads API on http://localhost:${PORT} — app at /app`));
+  console.log(`Karma Leads API on http://localhost:${PORT} — app at / (and /app)`));

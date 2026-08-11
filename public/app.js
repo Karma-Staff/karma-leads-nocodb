@@ -160,7 +160,7 @@ function logout() {
   // clear the sealed session server-side and end it at WorkOS too
   fetch("/api/auth/logout", { method: "POST" })
     .then((r) => r.json())
-    .then((o) => { location.href = o.url || "/app/"; })
+    .then((o) => { location.href = o.url || "/"; })
     .catch(() => location.reload());
 }
 

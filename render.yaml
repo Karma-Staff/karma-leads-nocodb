@@ -19,7 +19,7 @@ services:
     runtime: docker
     plan: starter                 # smallest paid tier; free spins down and cold-starts
     region: virginia              # keep the same region as the database below
-    healthCheckPath: /app/        # the site root / is 404 by design; /app/ is the app
+    healthCheckPath: /app/        # the app answers at both / and /app/
     envVars:
       - key: DATABASE_URL
         fromDatabase:

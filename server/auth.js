@@ -15,7 +15,7 @@
 
 const { query } = require("./db");
 
-const APP_URL = "/app/";
+const APP_URL = "/";        // the app is served at the root (and mirrored at /app)
 const COOKIE = "kl_session";
 
 /* ---------------- WorkOS ---------------- */
