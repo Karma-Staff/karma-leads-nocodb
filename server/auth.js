@@ -27,7 +27,8 @@ if (WORKOS_ON) {
   workos = new WorkOS(process.env.WORKOS_API_KEY,
     { clientId: process.env.WORKOS_CLIENT_ID });
 } else {
-  console.warn("[karma] WorkOS env incomplete (.env.server) — nobody can sign in");
+  console.warn("[karma] WorkOS env incomplete — nobody can sign in (set "
+    + "WORKOS_API_KEY, WORKOS_CLIENT_ID, WORKOS_REDIRECT_URI, SESSION_SECRET)");
 }
 const PASSWORD = process.env.SESSION_SECRET;
 
@@ -40,12 +41,17 @@ function getCookie(req, name) {
   return null;
 }
 
+/* Secure on hosted HTTPS (Render sets RENDER; compose-prod sets NODE_ENV),
+   omitted in dev so the cookie still works on plain http://localhost */
+const SECURE = (process.env.RENDER || process.env.NODE_ENV === "production")
+  ? "; Secure" : "";
+
 function setSession(res, sealed) {
   res.append("Set-Cookie",
-    `${COOKIE}=${encodeURIComponent(sealed)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=34560000`);
+    `${COOKIE}=${encodeURIComponent(sealed)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=34560000${SECURE}`);
 }
 const clearSession = (res) => res.append("Set-Cookie",
-  `${COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`);
+  `${COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${SECURE}`);
 
 /* the sealed cookie -> a WorkOS user, refreshing (and re-setting the cookie)
    when the access token inside has expired. null = not signed in this way. */

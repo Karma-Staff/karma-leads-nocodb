@@ -7,8 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 The whole Karma Leads system: a custom dashboard and its **domain API** (Node +
 Express) over **PostgreSQL**, the Python importers that feed it, and a NocoDB
 container demoted to an admin-only grid. Re-architected 2026-08-11 from the
-original embedded-NocoDB-over-SQLite design (`docs in dashboard/how-it-works.html`
-tell that story; the old `noco.db` is kept as the pre-migration backup).
+original embedded-NocoDB-over-SQLite design (`docs/how-it-works.html` tells
+that story; the old `data/noco.db` is kept as the pre-migration backup).
 
 ```
 Browser (/app, vanilla JS)
@@ -39,8 +39,11 @@ adapter were retired 2026-08-11 — WorkOS is the only sign-in.
   email-style three-pane UI; its data layer speaks to `/api/*` only.
 - `dashboard/` — the Python importers (`sync.py`, `import_dnc.py`,
   `domain_api.py`, `registry.py`, `setup_and_import.py` for parsers,
-  `setup_v2.py` for the cluster/guard functions), `README.md` (team-facing),
-  `how-it-works.html` (architecture story + timeline).
+  `setup_v2.py` for the cluster/guard functions).
+- `docs/` — `team-guide.md` (team-facing), `how-it-works.html` (architecture
+  story + timeline), `render-migration-runbook.html`, `screenshot.png`.
+- `data/` — gitignored local state: `lead_registry.db`, the frozen `noco.db`
+  backup, and `backups/` (registry snapshots).
 - `scripts/etl-from-noco.js` — the one-off SQLite→Postgres migration, with its
   verification report. Kept as the recovery path from the frozen `noco.db`
   backup. **Destructive** (truncates + reloads from the backup) — never run it
@@ -116,7 +119,7 @@ old codes from merges live in `lead_code_aliases` so bookmarks still resolve
 (`GET /api/leads/KL-…` follows them). `lead_keys` holds every natural key a
 lead ever arrived on, migrated from the registry.
 
-`lead_registry.db` (SQLite, beside the repo) is still the Python pipeline's
+`data/lead_registry.db` (SQLite, gitignored) is still the Python pipeline's
 identity store — `resolve()` there answers "which code is this cluster" during
 `sync.py`. Migration proof: the first post-migration dry-run resolved all
 35,243 clusters to existing codes — **0 minted, 0 merged**. The 6b step (moving
@@ -254,4 +257,8 @@ a warning and nobody can sign in — there is no fallback login.
   `lead_keys`; retire `lead_registry.db`.
 - **NocoDB admin table sync**: one click in the container UI (Data Sources →
   Sync) to import the table models the attach didn't auto-sync.
-- **Cloud deploy** via `docker-compose.prod.yml` when hosting is chosen.
+- **Cloud deploy**: the repo is a Render Blueprint (`render.yaml` — web
+  service from the `Dockerfile` + managed Postgres; health check `/app/`;
+  restore the local dump before the team moves over). The walkthrough is
+  `docs/render-migration-runbook.html`; `docker-compose.prod.yml` + `Caddyfile`
+  remain the self-hosted alternative.

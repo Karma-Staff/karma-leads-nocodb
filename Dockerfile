@@ -1,12 +1,12 @@
-# The domain API + static front end, for docker-compose.prod.yml.
-# Dev runs `node server/index.js` on the host instead — same code, no image.
+# The domain API + static front end — used by Render (see render.yaml) and
+# docker-compose.prod.yml. Dev runs `node server/index.js` on the host
+# instead — same code, no image.
 FROM node:22-slim
 WORKDIR /app
 ENV NODE_ENV=production
 COPY package.json package-lock.json ./
-# the API needs only express/pg/xlsx/workos — the heavyweight nocodb package
-# stays out of the image on purpose
-RUN npm install --omit=dev --no-audit --no-fund express pg xlsx @workos-inc/node
+# --omit=dev keeps sqlite3 (only the local ETL needs it) out of the image
+RUN npm ci --omit=dev --no-audit --no-fund
 COPY server ./server
 COPY migrations ./migrations
 COPY public ./public

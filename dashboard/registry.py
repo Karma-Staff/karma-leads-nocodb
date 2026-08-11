@@ -44,7 +44,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 APP = Path(__file__).resolve().parents[1]
-DB = APP / "lead_registry.db"
+# local state lives under data/ (gitignored), never loose in the repo root
+DB = APP / "data" / "lead_registry.db"
+DB.parent.mkdir(exist_ok=True)
 
 SCHEMA_VERSION = 2
 

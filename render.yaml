@@ -1,0 +1,46 @@
+# Render Blueprint — makes this repo one-click deployable:
+# Render → New → Blueprint → pick this repo. It creates the web service and
+# the Postgres database together and wires DATABASE_URL to the internal
+# connection string (never the external one — see docs/render-migration-runbook.html).
+#
+# Values marked sync:false are prompted for at deploy time; set them from
+# your local .env.server. WORKOS_REDIRECT_URI is the Render URL:
+#   https://<app>.onrender.com/api/auth/callback
+# — and the SAME string must be allowlisted in the WorkOS dashboard (Redirects).
+#
+# BEFORE the team uses it: restore the local database into Render
+# (runbook Phase 2). Because the blueprint deploys immediately, restore with
+#   pg_restore --clean --if-exists --no-owner --no-privileges -d "<external URL>?sslmode=require" karma.dump
+# so the freshly-migrated empty schema is replaced by the real one.
+
+services:
+  - type: web
+    name: karma-leads
+    runtime: docker
+    plan: starter                 # smallest paid tier; free spins down and cold-starts
+    region: virginia              # keep the same region as the database below
+    healthCheckPath: /app/        # the site root / is 404 by design; /app/ is the app
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: karma-db
+          property: connectionString
+      - key: WORKOS_API_KEY
+        sync: false
+      - key: WORKOS_CLIENT_ID
+        sync: false
+      - key: WORKOS_REDIRECT_URI
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true       # fresh random per environment; rotating it just re-logs everyone in
+      - key: APIFY_TOKEN
+        sync: false               # admin "Find jobs" button; leave blank to disable job search
+
+databases:
+  - name: karma-db
+    databaseName: karma
+    user: karma
+    plan: basic-256mb             # NEVER free: Render deletes free Postgres after 30 days,
+                                  # and the lead codes in it cannot be regenerated
+    region: virginia
+    postgresMajorVersion: "17"    # matches the local Docker Postgres

@@ -1,0 +1,20 @@
+# Keep the build context to what the Dockerfile actually COPYs
+# (package files, server/, migrations/, public/) — everything else stays out.
+node_modules
+data
+docs
+dashboard
+scripts
+db
+backups
+.git
+.env
+.env.server
+.env.example
+apify_token.json
+*.dump
+*.db
+*.md
+Caddyfile
+docker-compose*.yml
+start-dashboard.bat

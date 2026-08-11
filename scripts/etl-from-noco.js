@@ -18,8 +18,8 @@ const sqlite3 = require("sqlite3");
 const { pool } = require("../server/db");
 
 const ROOT = path.join(__dirname, "..");
-const NOCO = path.join(ROOT, "noco.db");
-const REGISTRY = path.join(ROOT, "lead_registry.db");
+const NOCO = path.join(ROOT, "data", "noco.db");
+const REGISTRY = path.join(ROOT, "data", "lead_registry.db");
 const RECENTS = path.join(ROOT, "recents.json");
 
 /* ---------------- tiny promise wrapper over sqlite3 ---------------- */

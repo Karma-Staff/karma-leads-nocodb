@@ -4,12 +4,18 @@
   "description": "",
   "main": "server/index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node server/index.js",
+    "migrate": "node server/migrate.js",
+    "migrate:status": "node server/migrate.js --status",
+    "etl": "node scripts/etl-from-noco.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
+  "engines": {
+    "node": ">=20.12"
+  },
   "dependencies": {
     "@workos-inc/node": "^10.9.0",
     "express": "^5.2.1",

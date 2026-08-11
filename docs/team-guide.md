@@ -244,7 +244,7 @@ dedupe functions `sync.py` imports.)
 
 > ⚠️ Every lead's permanent **Lead Code** (`KL-7QX4M2H8ZB`) is the identity
 > everything hangs off. The codes live in PostgreSQL now and in
-> `lead_registry.db` (the pipeline's copy) — the nightly `pg_dump` in the
+> `data\lead_registry.db` (the pipeline's copy) — the nightly `pg_dump` in the
 > production stack covers the first; keep a copy of the second off-machine.
 
 ---
@@ -299,8 +299,8 @@ Files
 | **App folder** | `C:\Users\David\karma-leads-nocodb` |
 | **Database** | PostgreSQL in Docker (`docker compose up -d`) — `karma` is the application, `nocodb_meta` is NocoDB's own |
 | **The API + app** | `server\` (Node) and `public\` (plain HTML/CSS/JS, no build step — edit and refresh) |
-| **Identity registry** | `lead_registry.db` — the pipeline's code registry. Keep a copy off-machine |
-| **Old database** | `noco.db` — the pre-migration SQLite, kept as a backup, no longer served |
+| **Identity registry** | `data\lead_registry.db` — the pipeline's code registry. Keep a copy off-machine |
+| **Old database** | `data\noco.db` — the pre-migration SQLite, kept as a backup, no longer served |
 | **Apify key** | `apify_token.json` (or the `APIFY_TOKEN` env var) — never leaves the server |
 | **Secrets** | `.env` and `.env.server` — see `.env.example` for why there are two |
 | **Source spreadsheets** | `old leads/`, `master_leads/`, `New_job_search/` (outside the repo) |
