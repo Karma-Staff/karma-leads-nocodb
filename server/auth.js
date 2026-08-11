@@ -13,9 +13,16 @@
    Authorization comes from app_users + organization_memberships —
    'admin' | 'member' — never from the identity provider. */
 
-const { query } = require("./db");
+const { query, tx } = require("./db");
 
 const APP_URL = "/";        // the app is served at the root (and mirrored at /app)
+
+/* Anyone signing in through WorkOS with this email domain is enrolled as a
+   MEMBER on first sign-in — no manual invite. Admin stays a deliberate act
+   (the Users tab, or cli.js user:add ... admin). Explicitly disabled accounts
+   stay locked out. Set AUTO_INVITE_DOMAIN="" to turn auto-enrolment off. */
+const AUTO_INVITE_DOMAIN =
+  (process.env.AUTO_INVITE_DOMAIN ?? "karmastaff.com").trim().toLowerCase();
 const COOKIE = "kl_session";
 
 /* ---------------- WorkOS ---------------- */
@@ -85,6 +92,29 @@ async function userByEmail(email) {
   return r.rows[0] || null;
 }
 
+/* First sign-in from the company domain: enrol as member. Returns the new
+   user row, or null when the email doesn't qualify — including when an
+   app_users row already exists (then it's either enabled, and userByEmail
+   found it, or deliberately disabled, and it must stay locked out). */
+async function autoInvite(email, name) {
+  if (!AUTO_INVITE_DOMAIN || !email.endsWith("@" + AUTO_INVITE_DOMAIN))
+    return null;
+  return tx(async (client) => {
+    const existing = (await client.query(
+      "SELECT id FROM app_users WHERE email = $1", [email])).rows[0];
+    if (existing) return null;                    // disabled — not our call
+    const u = (await client.query(
+      `INSERT INTO app_users (email, display_name) VALUES ($1, $2)
+       RETURNING id, email, display_name`, [email, name || null])).rows[0];
+    const org = (await client.query(
+      "SELECT id FROM organizations ORDER BY id LIMIT 1")).rows[0];
+    await client.query(
+      `INSERT INTO organization_memberships (org_id, user_id, role)
+       VALUES ($1, $2, 'member')`, [org.id, u.id]);
+    return { ...u, role: "member" };
+  });
+}
+
 /* resolve the caller, or null. {id: null} = authenticated but not invited. */
 async function resolve(req, res) {
   let email = null;
@@ -138,14 +168,15 @@ function mountAuthRoutes(app) {
           session: { sealSession: true, cookiePassword: PASSWORD },
         });
         const email = String(out.user?.email || "").trim().toLowerCase();
-        const u = await userByEmail(email);
+        const name = [out.user.firstName, out.user.lastName]
+          .filter(Boolean).join(" ") || null;
+        let u = await userByEmail(email);
+        if (!u) u = await autoInvite(email, name);  // @karmastaff.com walks in as member
         if (!u) {                       // authenticated, but not invited
           clearSession(res);
           return back(`${email} is not invited to Karma Leads — ask your manager.`);
         }
         // remember the provider's stable id and a display name, once known
-        const name = [out.user.firstName, out.user.lastName]
-          .filter(Boolean).join(" ") || null;
         await query(
           `UPDATE app_users SET oidc_sub = $1,
              display_name = COALESCE(display_name, $2) WHERE id = $3`,
@@ -174,4 +205,5 @@ function mountAuthRoutes(app) {
   }
 }
 
-module.exports = { requireUser, requireAdmin, resolve, mountAuthRoutes, WORKOS_ON };
+module.exports = { requireUser, requireAdmin, resolve, mountAuthRoutes,
+  autoInvite, WORKOS_ON };

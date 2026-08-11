@@ -99,6 +99,12 @@ markup + reveal in `boot()` is presentation. `node server/cli.js user:add`
 or the admin's `/api/users` endpoints manage the roster; the last admin
 cannot demote or disable themselves.
 
+**Auto-enrolment**: a first WorkOS sign-in from `@karmastaff.com`
+(`AUTO_INVITE_DOMAIN`, `""` disables) creates the member row itself —
+`autoInvite()` in `auth.js`. Other domains still bounce with "not invited",
+and a **disabled** account is never resurrected by signing in again. Admin is
+always a manual promotion (Users tab or the CLI).
+
 ## The activity log (Team activity tab)
 
 `activity_log` is append-only and written **by the API inside each mutation's
