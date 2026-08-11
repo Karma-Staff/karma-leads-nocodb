@@ -1,6 +1,11 @@
 -- The application schema. One leads table (the three NocoDB tables were ~20 of
 -- ~24 columns identical); identity/authz owned here, never by NocoDB; the
--- Segments table becomes a view. pg_trgm is created by db/init (superuser).
+-- Segments table becomes a view.
+
+-- pg_trgm backs the trigram search indexes below. It is a trusted extension
+-- (PG13+), so the database owner may create it without superuser — which is
+-- exactly the situation on managed hosts like Render, where db/init never runs.
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 -- ---------------------------------------------------------------- identity
 CREATE TABLE organizations (
