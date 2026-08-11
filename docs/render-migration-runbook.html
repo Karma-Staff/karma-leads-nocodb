@@ -1,0 +1,636 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Karma Leads to Render - Migration Runbook</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%232f54eb'/><path d='M11 7.5v17M11 16l9.5-8.5M11 16l9.5 8.5' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round' fill='none'/></svg>">
+</head>
+<body>
+<style>
+/* ---------- tokens: light is the base ---------- */
+:root {
+  --paper: #f7f8fb;
+  --card: #ffffff;
+  --ink: #1c2436;
+  --ink-2: #4c5670;
+  --ink-3: #8a93a8;
+  --line: #dfe3ee;
+  --accent: #2f54eb;
+  --accent-ink: #ffffff;
+  --accent-soft: #eaeefc;
+  --good: #1e8e5a;
+  --good-soft: #e3f3ea;
+  --warn: #b97b0e;
+  --warn-soft: #faf1dd;
+  --bad: #c2402f;
+  --bad-soft: #f9e8e5;
+  --code-bg: #1a2030;
+  --code-ink: #d6ddf0;
+  --code-accent: #8aa4ff;
+  --shadow: 0 1px 2px rgba(28, 36, 54, .06), 0 4px 14px rgba(28, 36, 54, .05);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #131722;
+    --card: #1a2030;
+    --ink: #dde3f0;
+    --ink-2: #a7b0c6;
+    --ink-3: #6d7690;
+    --line: #2a3145;
+    --accent: #8aa4ff;
+    --accent-ink: #10162b;
+    --accent-soft: #212c4d;
+    --good: #55c08c;
+    --good-soft: #17301f;
+    --warn: #d9a24a;
+    --warn-soft: #33270f;
+    --bad: #e0705f;
+    --bad-soft: #391a15;
+    --code-bg: #10141f;
+    --code-ink: #ccd4e8;
+    --code-accent: #8aa4ff;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .35), 0 4px 14px rgba(0, 0, 0, .25);
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #131722;
+  --card: #1a2030;
+  --ink: #dde3f0;
+  --ink-2: #a7b0c6;
+  --ink-3: #6d7690;
+  --line: #2a3145;
+  --accent: #8aa4ff;
+  --accent-ink: #10162b;
+  --accent-soft: #212c4d;
+  --good: #55c08c;
+  --good-soft: #17301f;
+  --warn: #d9a24a;
+  --warn-soft: #33270f;
+  --bad: #e0705f;
+  --bad-soft: #391a15;
+  --code-bg: #10141f;
+  --code-ink: #ccd4e8;
+  --code-accent: #8aa4ff;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .35), 0 4px 14px rgba(0, 0, 0, .25);
+}
+
+/* ---------- base ---------- */
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 400 16px/1.65 "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+main { max-width: 60rem; margin: 0 auto; padding: 0 1.25rem 5rem; }
+h1, h2, h3, h4 {
+  font-family: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  line-height: 1.2;
+  text-wrap: balance;
+  margin: 0;
+}
+h1 { font-size: clamp(1.9rem, 4.5vw, 2.6rem); font-weight: 750; letter-spacing: -.02em; }
+h2 { font-size: 1.45rem; font-weight: 700; letter-spacing: -.01em; }
+h3 { font-size: 1.1rem; font-weight: 650; }
+p { margin: 0 0 1rem; max-width: 74ch; }
+a { color: var(--accent); }
+strong { font-weight: 650; }
+code {
+  font-family: "Cascadia Code", Consolas, "Courier New", monospace;
+  font-size: .875em;
+  background: var(--accent-soft);
+  color: var(--ink);
+  padding: .1em .35em;
+  border-radius: 4px;
+}
+pre {
+  background: var(--code-bg);
+  color: var(--code-ink);
+  border-radius: 6px;
+  padding: .9rem 1.1rem;
+  overflow-x: auto;
+  font-size: .82rem;
+  line-height: 1.6;
+  margin: .75rem 0 1rem;
+}
+pre code { background: none; color: inherit; padding: 0; font-size: 1em; }
+pre .c { color: #7d88a6; }
+pre .a { color: var(--code-accent); }
+.eyebrow {
+  font-size: .72rem;
+  font-weight: 650;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 0 0 .5rem;
+}
+section { margin-top: 3.5rem; }
+.section-head { display: flex; align-items: baseline; gap: .75rem; border-bottom: 2px solid var(--line); padding-bottom: .6rem; margin-bottom: 1.25rem; }
+.section-head .no {
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: .8rem; color: var(--ink-3); font-weight: 400;
+}
+.note { color: var(--ink-2); font-size: .92rem; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---------- masthead ---------- */
+header.mast { padding: 3.5rem 0 0; }
+.mast-brand { display: flex; align-items: center; gap: .6rem; margin-bottom: 1.4rem; }
+.mast-brand svg { width: 26px; height: 26px; }
+.mast-brand span { font-weight: 650; font-size: .95rem; }
+.mast-brand b { color: var(--accent); }
+.mast p.lede { font-size: 1.08rem; color: var(--ink-2); max-width: 65ch; margin-top: 1rem; }
+.meta-row { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1.25rem; }
+.meta-chip {
+  font-size: .8rem; font-weight: 600; color: var(--ink-2);
+  background: var(--card); border: 1px solid var(--line); border-radius: 5px;
+  padding: .3rem .7rem; box-shadow: var(--shadow);
+}
+.meta-chip b { color: var(--ink); font-variant-numeric: tabular-nums; }
+
+/* ---------- architecture diagram ---------- */
+.arch { display: grid; grid-template-columns: 1fr auto 1fr; gap: .75rem 1rem; align-items: stretch; margin: 1.5rem 0; }
+.arch-col { display: flex; flex-direction: column; gap: .75rem; }
+.arch-box {
+  background: var(--card); border: 1px solid var(--line); border-radius: 6px;
+  padding: .85rem 1rem; box-shadow: var(--shadow);
+}
+.arch-box h4 { font-size: .95rem; margin-bottom: .35rem; }
+.arch-box ul { margin: 0; padding-left: 1.1rem; font-size: .85rem; color: var(--ink-2); }
+.arch-box li { margin: .15rem 0; }
+.arch-title {
+  font-size: .72rem; font-weight: 650; letter-spacing: .09em; text-transform: uppercase;
+  color: var(--ink-3); margin-bottom: .1rem;
+}
+.arch-stays { border-top: 3px solid var(--good); }
+.arch-moves { border-top: 3px solid var(--accent); }
+.arch-link {
+  display: flex; flex-direction: column; justify-content: center; align-items: center;
+  color: var(--ink-3); font-size: .72rem; font-weight: 600; letter-spacing: .05em;
+  text-transform: uppercase; gap: .2rem; min-width: 5.5rem; text-align: center;
+}
+.arch-link svg { width: 44px; height: 16px; }
+@media (max-width: 620px) {
+  .arch { grid-template-columns: 1fr; }
+  .arch-link { transform: rotate(90deg); min-height: 4rem; }
+}
+
+/* ---------- status lists (done / faults) ---------- */
+.twocol { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+@media (max-width: 720px) { .twocol { grid-template-columns: 1fr; } }
+.status-card { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 1.1rem 1.25rem; box-shadow: var(--shadow); }
+.status-card h3 { display: flex; align-items: center; gap: .5rem; margin-bottom: .75rem; }
+.status-card ul { margin: 0; padding: 0; list-style: none; }
+.status-card li { padding: .45rem 0 .45rem 1.5rem; position: relative; font-size: .92rem; border-top: 1px solid var(--line); }
+.status-card li:first-child { border-top: 0; }
+.status-card li svg { position: absolute; left: 0; top: .68rem; width: 15px; height: 15px; }
+.tick { stroke: var(--good); } .cross { stroke: var(--bad); } .tilde { stroke: var(--warn); }
+.status-card li b { font-weight: 650; }
+.status-card li .why { display: block; color: var(--ink-2); font-size: .85rem; margin-top: .1rem; }
+
+/* ---------- phase timeline ---------- */
+.phase { display: grid; grid-template-columns: 3.2rem 1fr; gap: 0 1.1rem; position: relative; padding-bottom: 2.2rem; }
+.phase:last-child { padding-bottom: 0; }
+.phase::before {
+  content: ""; position: absolute; left: 1.55rem; top: 2.6rem; bottom: 0;
+  width: 2px; background: var(--line);
+}
+.phase:last-child::before { display: none; }
+.phase-no {
+  width: 3.2rem; height: 3.2rem; border-radius: 6px;
+  background: var(--accent); color: var(--accent-ink);
+  display: flex; align-items: center; justify-content: center;
+  font-family: "Segoe UI Variable Display", "Segoe UI", sans-serif;
+  font-size: 1.15rem; font-weight: 750; z-index: 1; position: relative;
+}
+.phase-body h3 { padding-top: .35rem; }
+.phase-body .time { font-size: .78rem; font-weight: 650; color: var(--ink-3); text-transform: uppercase; letter-spacing: .07em; margin: .15rem 0 .6rem; }
+.phase-body p { font-size: .95rem; }
+.checkpoint {
+  border-left: 3px solid var(--good); background: var(--good-soft);
+  border-radius: 0 5px 5px 0; padding: .6rem .9rem; font-size: .88rem; margin: .75rem 0 0;
+  max-width: 70ch;
+}
+.checkpoint b { color: var(--good); }
+
+/* ---------- env table ---------- */
+.tbl-wrap { overflow-x: auto; margin: .75rem 0 1rem; }
+table { border-collapse: collapse; width: 100%; font-size: .87rem; min-width: 540px; }
+th { text-align: left; font-size: .72rem; text-transform: uppercase; letter-spacing: .07em; color: var(--ink-3); font-weight: 650; padding: .45rem .75rem; border-bottom: 2px solid var(--line); }
+td { padding: .55rem .75rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+td code { white-space: nowrap; }
+
+/* ---------- risk cards ---------- */
+.risk { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 1rem 1.2rem; margin-bottom: .9rem; box-shadow: var(--shadow); }
+.risk-head { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin-bottom: .4rem; }
+.risk-head h3 { font-size: 1rem; }
+.chip {
+  font-size: .68rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+  padding: .18rem .55rem; border-radius: 4px;
+}
+.chip-block { background: var(--bad-soft); color: var(--bad); }
+.chip-data { background: var(--warn-soft); color: var(--warn); }
+.chip-annoy { background: var(--accent-soft); color: var(--accent); }
+.risk p { font-size: .9rem; margin-bottom: .5rem; }
+.risk p:last-child { margin-bottom: 0; }
+.risk .fix { font-weight: 650; color: var(--ink); }
+
+/* ---------- week plan ---------- */
+.week { border: 1px solid var(--line); border-radius: 6px; overflow: hidden; box-shadow: var(--shadow); }
+.day { display: grid; grid-template-columns: 8.5rem 1fr; background: var(--card); border-top: 1px solid var(--line); }
+.day:first-child { border-top: 0; }
+.day-when { padding: .8rem 1rem; background: var(--accent-soft); font-weight: 650; font-size: .85rem; }
+.day-when small { display: block; font-weight: 400; color: var(--ink-2); font-size: .75rem; }
+.day-what { padding: .8rem 1.1rem; font-size: .9rem; }
+.day-what b { font-weight: 650; }
+@media (max-width: 560px) { .day { grid-template-columns: 1fr; } .day-when { padding-bottom: .3rem; } }
+
+/* ---------- glossary ---------- */
+dl.gloss { display: grid; grid-template-columns: max-content 1fr; gap: .55rem 1.25rem; font-size: .9rem; max-width: 74ch; }
+dl.gloss dt { font-weight: 650; }
+dl.gloss dd { margin: 0; color: var(--ink-2); }
+@media (max-width: 560px) { dl.gloss { grid-template-columns: 1fr; } dl.gloss dd { margin-bottom: .5rem; } }
+
+footer { margin-top: 4rem; padding-top: 1.25rem; border-top: 1px solid var(--line); color: var(--ink-3); font-size: .82rem; }
+</style>
+
+<main>
+<header class="mast">
+  <div class="mast-brand">
+    <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="6" fill="#2f54eb"/><path d="M11 7.5v17M11 16l9.5-8.5M11 16l9.5 8.5" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+    <span><b>Karma</b>Leads · Ops runbook</span>
+  </div>
+  <p class="eyebrow">From one Windows PC to the cloud</p>
+  <h1>Moving Karma Leads to Render</h1>
+  <p class="lede">Right now the whole system lives on one computer: if it sleeps, the team's dashboard sleeps.
+  This guide moves the dashboard and its database to Render — a hosting service that runs them for you —
+  while deliberately keeping the sensitive parts (raw lead files, the do-not-call list, the identity registry)
+  on your machine. It covers what to do, what can go wrong, and how to pace it over one week.</p>
+  <div class="meta-row">
+    <span class="meta-chip">Cost <b>≈ $13–15 / month</b></span>
+    <span class="meta-chip">Hands-on work <b>≈ 4–6 hours</b></span>
+    <span class="meta-chip">Calendar time <b>1 week</b> (parallel run)</span>
+    <span class="meta-chip">Written <b>Aug 11, 2026</b></span>
+  </div>
+</header>
+
+<!-- ================================================================ -->
+<section id="picture">
+  <div class="section-head"><span class="no">01</span><h2>The big picture: what moves, what stays</h2></div>
+  <p>A migration is only scary when you're not sure what's actually moving. Here, exactly two things move to
+  Render: the <strong>web app</strong> (the Node server in <code>server/</code> plus the pages in
+  <code>public/</code>) and the <strong>PostgreSQL database</strong> (every lead, user, note, and activity row).
+  Everything privacy-sensitive stays on your PC on purpose.</p>
+
+  <div class="arch">
+    <div class="arch-col">
+      <div class="arch-title">Stays on your PC</div>
+      <div class="arch-box arch-stays">
+        <h4>The import pipeline</h4>
+        <ul>
+          <li>Raw lead exports (real names, phones)</li>
+          <li>The do-not-call list</li>
+          <li><code>lead_registry.db</code> — the identity store</li>
+          <li><code>sync.py</code> / <code>import_dnc.py</code></li>
+        </ul>
+      </div>
+      <div class="arch-box arch-stays">
+        <h4>Secret files</h4>
+        <ul>
+          <li><code>apify_token.json</code>, <code>.env.server</code></li>
+          <li>None of these are in git, none deploy</li>
+        </ul>
+      </div>
+    </div>
+    <div class="arch-link" aria-hidden="true">
+      <svg viewBox="0 0 44 16"><path d="M2 8h36m0 0-5-5m5 5-5 5" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      HTTPS +<br>service token
+    </div>
+    <div class="arch-col">
+      <div class="arch-title">Moves to Render</div>
+      <div class="arch-box arch-moves">
+        <h4>Web service (Docker)</h4>
+        <ul>
+          <li><code>server/index.js</code> — the API + the app pages</li>
+          <li>Runs migrations on boot, then serves</li>
+          <li>Sign-in via WorkOS (already live)</li>
+        </ul>
+      </div>
+      <div class="arch-box arch-moves">
+        <h4>Managed PostgreSQL 17</h4>
+        <ul>
+          <li>Database <code>karma</code> — the system of record</li>
+          <li>Daily backups handled by Render</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <p><strong>Why this works:</strong> after the August re-architecture, the web app is
+  <em>stateless</em> — a fancy word meaning the server itself remembers nothing between restarts.
+  Every fact lives in Postgres; uploaded import files are parsed in memory and written straight to the
+  database; your login is a sealed cookie in the browser. Render restarts and redeploys containers whenever
+  it wants, and a stateless app genuinely does not care. The old design (a SQLite file on disk) would have
+  lost data on every deploy — that's the design you already migrated away from.</p>
+  <p class="note">What deliberately does <em>not</em> deploy: the NocoDB admin grid (it needs a second
+  database Render's single-database plans can't host — defer it), Caddy (Render provides HTTPS itself),
+  and the old legacy server (already retired at the WorkOS cutover).</p>
+</section>
+
+<!-- ================================================================ -->
+<section id="standing">
+  <div class="section-head"><span class="no">02</span><h2>Where you stand: solved, and honest faults</h2></div>
+  <p>An earlier deploy review found five blockers. Most were already fixed by the re-architecture; the
+  rest were patched this week. What remains on the right is the honest list of weaknesses — none blocks
+  the migration, but you should know them by name.</p>
+
+  <div class="twocol">
+    <div class="status-card">
+      <h3><svg viewBox="0 0 16 16" class="tick" aria-hidden="true"><path d="m3 8.5 3.2 3.2L13 5" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Already solved</h3>
+      <ul>
+        <li><svg viewBox="0 0 16 16" class="tick"><path d="m3 8.5 3.2 3.2L13 5" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><b>Port:</b> the server reads <code>process.env.PORT</code>, which Render injects.</li>
+        <li><svg viewBox="0 0 16 16" class="tick"><path d="m3 8.5 3.2 3.2L13 5" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><b>Ephemeral disk:</b> all state is in Postgres; nothing the server writes to disk matters.</li>
+        <li><svg viewBox="0 0 16 16" class="tick"><path d="m3 8.5 3.2 3.2L13 5" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><b>Secrets:</b> every token now reads the environment first, files as local fallback.</li>
+        <li><svg viewBox="0 0 16 16" class="tick"><path d="m3 8.5 3.2 3.2L13 5" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><b>Importers:</b> they already talk to the API over HTTPS with a scoped token — never to the database directly.</li>
+        <li><svg viewBox="0 0 16 16" class="tick"><path d="m3 8.5 3.2 3.2L13 5" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><b>Auth:</b> WorkOS cutover is done; the legacy sign-in server is deleted.</li>
+        <li><svg viewBox="0 0 16 16" class="tick"><path d="m3 8.5 3.2 3.2L13 5" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><b>Docker image:</b> installs <code>@workos-inc/node</code>, runs migrations before serving.</li>
+        <li><svg viewBox="0 0 16 16" class="tick"><path d="m3 8.5 3.2 3.2L13 5" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><b>Clipboard:</b> HTTPS hosting makes <code>navigator.clipboard</code> work everywhere.</li>
+      </ul>
+    </div>
+    <div class="status-card">
+      <h3><svg viewBox="0 0 16 16" class="tilde" aria-hidden="true"><path d="M2.5 9c1.8-3 3.8-3 5.5 0s3.7 3 5.5 0" fill="none" stroke-width="2" stroke-linecap="round"/></svg>Honest faults to manage</h3>
+      <ul>
+        <li><svg viewBox="0 0 16 16" class="cross"><path d="m4 4 8 8M12 4l-8 8" fill="none" stroke-width="2" stroke-linecap="round"/></svg><b>One-machine bus factor.</b><span class="why">Imports, the registry, and all the know-how live on a single Windows PC. If it dies, imports stop (the dashboard keeps running). Back up <code>lead_registry.db</code> off the machine.</span></li>
+        <li><svg viewBox="0 0 16 16" class="cross"><path d="m4 4 8 8M12 4l-8 8" fill="none" stroke-width="2" stroke-linecap="round"/></svg><b>No tests, no staging.</b><span class="why">Every deploy is trust-based. Mitigation: the parallel-run week below, and <code>--dry-run</code> before every import.</span></li>
+        <li><svg viewBox="0 0 16 16" class="tilde"><path d="M2.5 9c1.8-3 3.8-3 5.5 0s3.7 3 5.5 0" fill="none" stroke-width="2" stroke-linecap="round"/></svg><b>Step 6b is unfinished.</b><span class="why">Lead identity still resolves through the local SQLite registry, which is why imports must keep running on your PC for now.</span></li>
+        <li><svg viewBox="0 0 16 16" class="tilde"><path d="M2.5 9c1.8-3 3.8-3 5.5 0s3.7 3 5.5 0" fill="none" stroke-width="2" stroke-linecap="round"/></svg><b>No hosted admin grid.</b><span class="why">NocoDB stays local-only. Admin data edits away from your PC happen through the app itself.</span></li>
+        <li><svg viewBox="0 0 16 16" class="tilde"><path d="M2.5 9c1.8-3 3.8-3 5.5 0s3.7 3 5.5 0" fill="none" stroke-width="2" stroke-linecap="round"/></svg><b>Session cookie lacks the <code>Secure</code> flag.</b><span class="why">Harmless behind Render's HTTPS, but a two-line hardening worth doing later.</span></li>
+        <li><svg viewBox="0 0 16 16" class="tilde"><path d="M2.5 9c1.8-3 3.8-3 5.5 0s3.7 3 5.5 0" fill="none" stroke-width="2" stroke-linecap="round"/></svg><b>Off-site backups are a habit, not a system.</b><span class="why">Render backs up daily, but the lead codes can never be regenerated — keep your own weekly dump too (Phase 6).</span></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================ -->
+<section id="steps">
+  <div class="section-head"><span class="no">03</span><h2>The migration, phase by phase</h2></div>
+  <p>Each phase ends with a <strong>checkpoint</strong> — a way to prove it worked before moving on. If a
+  checkpoint fails, stop and fix; nothing in later phases can repair an earlier one. Commands are
+  PowerShell, run from the repo folder.</p>
+
+  <div class="phase">
+    <div class="phase-no">0</div>
+    <div class="phase-body">
+      <h3>Prepare (nothing changes yet)</h3>
+      <p class="time">≈ 30 min · zero risk</p>
+      <p>Confirm the repo is pushed to GitHub with no secrets in it (they're gitignored — verify with
+      <code>git status</code> that <code>.env</code>, <code>.env.server</code>, and the token files are
+      untracked). Have your WorkOS dashboard login and Render account ready. Pick the Render region
+      closest to the team and stick to it — the database and web service must share a region to talk over
+      the fast internal network.</p>
+      <div class="checkpoint"><b>Checkpoint:</b> <code>git log</code> on GitHub shows your latest commit; no secret file appears anywhere on github.com.</div>
+    </div>
+  </div>
+
+  <div class="phase">
+    <div class="phase-no">1</div>
+    <div class="phase-body">
+      <h3>Create the database</h3>
+      <p class="time">≈ 15 min</p>
+      <p>Render → New → PostgreSQL. Version <strong>17</strong> (matching local), database name
+      <strong><code>karma</code></strong>, smallest <strong>paid</strong> instance. Paid is not optional:
+      Render's free Postgres is <em>deleted after 30 days</em>, and this database will hold lead codes
+      that cannot be regenerated. When it's created, Render shows two connection strings —
+      <strong>internal</strong> (only reachable from your Render services; the app will use this) and
+      <strong>external</strong> (reachable from your PC; you'll use it for loading data and admin).</p>
+      <div class="checkpoint"><b>Checkpoint:</b> from your PC, <code>psql "&lt;external URL&gt;" -c "select 1"</code> answers. If it complains about SSL, add <code>?sslmode=require</code> to the URL.</div>
+    </div>
+  </div>
+
+  <div class="phase">
+    <div class="phase-no">2</div>
+    <div class="phase-body">
+      <h3>Copy your data up — before the first deploy</h3>
+      <p class="time">≈ 30 min</p>
+      <p>Your local Postgres is already the system of record, so this is a plain dump-and-restore, not a
+      re-run of the old migration script. The order matters: restoring <em>first</em> brings the
+      <code>_migrations</code> table along, so when the app boots on Render and runs
+      <code>server/migrate.js</code>, it correctly sees everything already applied instead of fighting the
+      restored schema.</p>
+<pre><code><span class="c"># dump the karma database out of the local Docker Postgres</span>
+docker compose exec db pg_dump -U postgres -d karma -F c -f /tmp/karma.dump
+docker compose cp db:/tmp/karma.dump .\karma.dump
+
+<span class="c"># restore it into Render (external URL, with sslmode=require)</span>
+pg_restore --no-owner --no-privileges -d <span class="a">"&lt;external URL&gt;?sslmode=require"</span> .\karma.dump</code></pre>
+      <p class="note"><code>--no-owner --no-privileges</code> matters because Render gives you one database
+      user, not the <code>karma_api</code> / <code>nocodb_admin</code> role setup from Docker — ownership
+      statements from the dump would otherwise fail. That role separation existed mainly to fence in the
+      NocoDB container, which isn't coming along.</p>
+      <div class="checkpoint"><b>Checkpoint:</b> <code>psql "&lt;external URL&gt;" -c "select count(*) from leads"</code> matches your local count.</div>
+    </div>
+  </div>
+
+  <div class="phase">
+    <div class="phase-no">3</div>
+    <div class="phase-body">
+      <h3>Create the web service</h3>
+      <p class="time">≈ 45 min</p>
+      <p>Render → New → Web Service → pick the GitHub repo. Runtime: <strong>Docker</strong> (the repo's
+      <code>Dockerfile</code> already does the right thing). Instance: Starter. Then two settings people
+      miss: set the <strong>health check path to <code>/app/</code></strong> — the site's root
+      <code>/</code> answers 404, and Render would conclude the app is broken and loop the deploy — and
+      add the environment variables:</p>
+      <div class="tbl-wrap"><table>
+        <tr><th>Variable</th><th>Value</th><th>What it is</th></tr>
+        <tr><td><code>DATABASE_URL</code></td><td>the <strong>internal</strong> connection string</td><td>How the app reaches Postgres. Internal, not external — see risk list.</td></tr>
+        <tr><td><code>WORKOS_API_KEY</code></td><td><code>sk_…</code> from WorkOS</td><td rowspan="4">The sign-in system. Same values as your local <code>.env.server</code>, except the redirect URI, which must be the Render URL.</td></tr>
+        <tr><td><code>WORKOS_CLIENT_ID</code></td><td><code>client_…</code></td></tr>
+        <tr><td><code>WORKOS_REDIRECT_URI</code></td><td><code>https://&lt;app&gt;.onrender.com/api/auth/callback</code></td></tr>
+        <tr><td><code>SESSION_SECRET</code></td><td>a long random string</td></tr>
+        <tr><td><code>APIFY_TOKEN</code></td><td>the Apify key</td><td>Powers the admin “Find jobs” button.</td></tr>
+      </table></div>
+      <p class="note">Leave <code>NOCODB_ADMIN_URL</code> unset — there is no hosted NocoDB, so the admin
+      menu's link simply goes nowhere for now. Don't set <code>PORT</code>; Render injects it.</p>
+      <div class="checkpoint"><b>Checkpoint:</b> the deploy log shows migrations reporting nothing to apply, then
+      “Karma Leads API on …”. The service shows <b>Live</b>.</div>
+    </div>
+  </div>
+
+  <div class="phase">
+    <div class="phase-no">4</div>
+    <div class="phase-body">
+      <h3>Tell WorkOS about the new address</h3>
+      <p class="time">≈ 10 min · the step everyone forgets</p>
+      <p>WorkOS only redirects sign-ins to URLs it has been told to trust. In the WorkOS dashboard →
+      Redirects, add <code>https://&lt;app&gt;.onrender.com/api/auth/callback</code> — character-for-character
+      identical to the env var, alongside the existing localhost one (keep that; your local runs still use it).</p>
+      <div class="checkpoint"><b>Checkpoint:</b> open <code>https://&lt;app&gt;.onrender.com/app/</code>, sign in with your
+      own account, and land on the dashboard with correct lead counts.</div>
+    </div>
+  </div>
+
+  <div class="phase">
+    <div class="phase-no">5</div>
+    <div class="phase-body">
+      <h3>Point the import pipeline at the cloud</h3>
+      <p class="time">≈ 30 min</p>
+      <p>The importers stay on your PC — that's the privacy feature, not a compromise. They just need two
+      environment variables changed to aim at Render instead of localhost. Mint a fresh service token so
+      the hosted app has its own credential you can revoke independently:</p>
+<pre><code><span class="c"># mint a pipeline token against the HOSTED database</span>
+$env:DATABASE_URL = <span class="a">"&lt;external URL&gt;?sslmode=require"</span>
+node server/cli.js token:create pipeline imports:write   <span class="c"># copy the klsvc_… once — it's shown once</span>
+
+<span class="c"># aim the pipeline at Render and rehearse</span>
+$env:KARMA_API_URL   = <span class="a">"https://&lt;app&gt;.onrender.com"</span>
+$env:KARMA_API_TOKEN = <span class="a">"klsvc_…"</span>
+python dashboard/sync.py --dry-run    <span class="c"># ALWAYS first; read the plan it prints</span>
+python dashboard/sync.py</code></pre>
+      <div class="checkpoint"><b>Checkpoint:</b> the dry-run's insert/update numbers look sane (a full re-run
+      against just-restored data should be nearly all no-ops), and after the real run the import appears in the
+      Team activity tab.</div>
+    </div>
+  </div>
+
+  <div class="phase">
+    <div class="phase-no">6</div>
+    <div class="phase-body">
+      <h3>Make backups a habit</h3>
+      <p class="time">≈ 20 min, then automatic</p>
+      <p>Render keeps daily backups, but platform backups protect you from Render's disks failing — not from
+      an account mistake, a bad import, or Render itself. Keep your own copy of the two things that can never
+      be rebuilt: the database (it holds every lead code) and <code>lead_registry.db</code>. A Windows
+      Scheduled Task running weekly is enough:</p>
+<pre><code>pg_dump <span class="a">"&lt;external URL&gt;?sslmode=require"</span> -F c -f karma-$(Get-Date -Format yyyyMMdd).dump
+Copy-Item lead_registry.db "$env:OneDrive\backups\lead_registry-$(Get-Date -Format yyyyMMdd).db"</code></pre>
+      <div class="checkpoint"><b>Checkpoint:</b> you have restored one of these dumps into a scratch database
+      once. A backup you've never restored is a hope, not a backup.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================ -->
+<section id="risks">
+  <div class="section-head"><span class="no">04</span><h2>Where it can go wrong</h2></div>
+  <p>Every one of these is predictable, which means every one is survivable. Severity:
+  <span class="chip chip-block">blocks deploy</span> stops you cold,
+  <span class="chip chip-data">data risk</span> can cost real information,
+  <span class="chip chip-annoy">annoyance</span> wastes an afternoon.</p>
+
+  <div class="risk">
+    <div class="risk-head"><h3>Deploy loops forever, app never goes Live</h3><span class="chip chip-block">blocks deploy</span></div>
+    <p>Render polls the health check path and restarts the app when it doesn't answer 200. The site root
+    <code>/</code> is a 404 by design (the app lives at <code>/app/</code>).</p>
+    <p class="fix">Fix: set the health check path to /app/ in the service settings.</p>
+  </div>
+
+  <div class="risk">
+    <div class="risk-head"><h3>“no pg_hba.conf entry” / “SSL required” when connecting from your PC</h3><span class="chip chip-block">blocks deploy</span></div>
+    <p>Render's <em>external</em> connections require encryption; <code>psql</code>, <code>pg_dump</code>, and
+    <code>pg_restore</code> won't always ask for it by default.</p>
+    <p class="fix">Fix: append ?sslmode=require to the external URL. And never give the hosted app the external
+    URL — the internal one is faster, free of this problem, and doesn't leave Render's network.</p>
+  </div>
+
+  <div class="risk">
+    <div class="risk-head"><h3>Boot log says “relation already exists”</h3><span class="chip chip-block">blocks deploy</span></div>
+    <p>This means migrations ran against a database that has tables but no <code>_migrations</code> history —
+    the classic symptom of deploying <em>before</em> restoring, then restoring schema on top.</p>
+    <p class="fix">Fix: keep the order from Phase 2 — restore the full dump first, deploy second. If you're
+    already tangled: drop and recreate the Render database, restore, redeploy.</p>
+  </div>
+
+  <div class="risk">
+    <div class="risk-head"><h3>Sign-in bounces with a WorkOS error</h3><span class="chip chip-block">blocks deploy</span></div>
+    <p>The redirect URI in the env var and the one allowlisted in the WorkOS dashboard must match exactly —
+    scheme, host, path. One character off (http vs https, a trailing slash) and WorkOS refuses.</p>
+    <p class="fix">Fix: copy-paste the same string into both places. Add the custom domain's callback too if you
+    later attach one.</p>
+  </div>
+
+  <div class="risk">
+    <div class="risk-head"><h3>Sign-in works, then “not invited”</h3><span class="chip chip-annoy">annoyance</span></div>
+    <p>Working as designed: being able to authenticate with WorkOS is not the same as being invited. The email
+    must exist in <code>app_users</code>, which came over in your restore — so this usually means a teammate
+    signed in with a different email than the one on file.</p>
+    <p class="fix">Fix: node server/cli.js user:add name@karmastaff.com member (with DATABASE_URL pointed at the
+    external URL).</p>
+  </div>
+
+  <div class="risk">
+    <div class="risk-head"><h3>Pipeline gets 401 / 403</h3><span class="chip chip-annoy">annoyance</span></div>
+    <p>Either <code>KARMA_API_TOKEN</code> isn't set in the shell running <code>sync.py</code>, or the token was
+    minted against the wrong database (local vs hosted — the token lives <em>in</em> the database it was minted
+    against), or someone tried to use the import token for a non-import endpoint, which it can never reach by
+    design.</p>
+    <p class="fix">Fix: re-mint against the Render URL (Phase 5) and re-set both env vars in the same window.</p>
+  </div>
+
+  <div class="risk">
+    <div class="risk-head"><h3>Picking free-tier Postgres to save money</h3><span class="chip chip-data">data risk</span></div>
+    <p>Render deletes free Postgres instances after 30 days. On day 31 the leads, the users, the activity log,
+    and every lead code would be gone. This is the single most expensive $6/month you could ever save.</p>
+    <p class="fix">Fix: smallest paid tier from day one. Your ~35k leads occupy a few megabytes; the smallest
+    plan is already oversized.</p>
+  </div>
+
+  <div class="risk">
+    <div class="risk-head"><h3>Running an import while unsure where it's pointed</h3><span class="chip chip-data">data risk</span></div>
+    <p>During the parallel-run week both databases exist. An import aimed at the wrong one splits your data's
+    history in two, and un-splitting it is manual work.</p>
+    <p class="fix">Fix: echo $env:KARMA_API_URL before every run, and always --dry-run first — the plan it prints
+    tells you which world you're about to change. After cutover week, stop the local stack so there's only one
+    target left.</p>
+  </div>
+</section>
+
+<!-- ================================================================ -->
+<section id="timeline">
+  <div class="section-head"><span class="no">05</span><h2>A one-week timeline that can't hurt you</h2></div>
+  <p>The trick that makes this migration safe for a beginner: <strong>never turn the old system off to turn
+  the new one on.</strong> Your local stack keeps running untouched all week. Render starts as a copy; the
+  team moves over only after it has proven itself; and “rollback” is never more dramatic than telling the
+  team to use the old address again.</p>
+
+  <div class="week">
+    <div class="day"><div class="day-when">Saturday<small>≈ 2 h</small></div><div class="day-what"><b>Build it:</b> Phases 0–2. Accounts, database, restore. Nothing the team uses has changed.</div></div>
+    <div class="day"><div class="day-when">Sunday<small>≈ 2 h</small></div><div class="day-what"><b>Light it up:</b> Phases 3–4. Deploy, health check, WorkOS callback. Sign in yourself, click through every tab, open leads, leave a note. You are the only user who knows this exists.</div></div>
+    <div class="day"><div class="day-when">Monday<small>≈ 15 min</small></div><div class="day-what"><b>One volunteer:</b> give a single teammate the Render URL. Real work, real edits — on the new system. Everyone else stays local. Watch the Team activity tab and Render's logs.</div></div>
+    <div class="day"><div class="day-when">Tue – Wed</div><div class="day-what"><b>Whole team on Render:</b> share the URL with everyone; the local stack keeps running as the safety net. Any serious problem → team goes back to the old address, you debug without pressure.</div></div>
+    <div class="day"><div class="day-when">Thursday<small>≈ 30 min</small></div><div class="day-what"><b>Move the pipeline:</b> Phase 5. First hosted <code>sync.py --dry-run</code>, then the real run. From here, new leads land on Render — the moment of true cutover.</div></div>
+    <div class="day"><div class="day-when">Weekend<small>≈ 30 min</small></div><div class="day-what"><b>Retire and protect:</b> stop serving the app locally (keep Docker Postgres around for a few weeks as a cold spare), set up the backup task (Phase 6), and do the one test restore.</div></div>
+  </div>
+
+  <p style="margin-top:1rem" class="note"><strong>The one rule of the week:</strong> during days when both
+  systems exist, edits made on one do not appear on the other. That's fine for a trial day — but it's why
+  the pipeline moves <em>last</em>, after the team has committed, and why the local stack is retired promptly
+  after: a safety net you never jump into on purpose.</p>
+</section>
+
+<!-- ================================================================ -->
+<section id="glossary">
+  <div class="section-head"><span class="no">06</span><h2>Glossary for the words this guide leans on</h2></div>
+  <dl class="gloss">
+    <dt>Environment variable</dt><dd>A named value handed to a program by whatever starts it, instead of written in a file. How cloud platforms pass secrets and settings without putting them in code.</dd>
+    <dt>Managed Postgres</dt><dd>A database Render runs for you — they patch it, back it up daily, and hand you a connection URL. You bring only your data.</dd>
+    <dt>Internal vs external URL</dt><dd>Two addresses for the same database: internal works only between your Render services (fast, private — for the app); external works from anywhere with SSL (for you and your scripts).</dd>
+    <dt>pg_dump / pg_restore</dt><dd>Postgres's export and import tools. A “dump” is a complete, restorable copy of a database in one file.</dd>
+    <dt>Stateless</dt><dd>A server that keeps no memory of its own between restarts — everything durable lives in the database. The property that makes cloud hosting safe.</dd>
+    <dt>Health check</dt><dd>A URL the platform polls to ask “are you alive?”. Anything but a quick 200 response and the platform restarts your app.</dd>
+    <dt>Service token</dt><dd>A password for a program instead of a person — here, <code>klsvc_…</code>, which can only submit imports and can be revoked without touching any human account.</dd>
+    <dt>Parallel run</dt><dd>Operating the old and new systems side by side so the new one can fail safely while the old one still works.</dd>
+  </dl>
+</section>
+
+<footer>
+  Karma Leads ops runbook · written August 11, 2026, against the post-WorkOS-cutover architecture ·
+  companion to <code>CLAUDE.md</code> and <code>dashboard/how-it-works.html</code> in the repo.
+</footer>
+</main>
+
+</body>
+</html>
+

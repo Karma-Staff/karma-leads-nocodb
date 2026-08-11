@@ -1,8 +1,9 @@
 # Karma Leads
 
-A leads dashboard for Karma Staff: ~38k restoration-industry companies, people and
-job-board postings, imported from a pile of CSV/XLSX exports into
-[NocoDB](https://nocodb.com), with a custom email-style front end on top.
+A leads dashboard for Karma Staff: ~38k restoration-industry companies, people
+and job-board postings in PostgreSQL, behind a custom domain API (Node +
+Express) with an email-style front end, fed by Python importers. A NocoDB
+container survives as an admins-only grid.
 
 ![the dashboard](test_image.png)
 
@@ -12,33 +13,39 @@ Everything in this repo is code. Two things it deliberately does **not** contain
 
 | What | Where | Why not here |
 |---|---|---|
-| `noco.db` | this folder, gitignored | The live database — statuses, owners, notes, invitations. Rewritten constantly. |
+| Secrets & local data | this folder, gitignored | `.env` / `.env.server` / `apify_token.json`, the frozen `noco.db` backup and the `lead_registry.db` identity store. |
 | Raw lead exports | `…\OneDrive\Documents\GitHub\KarmaLeads\` | Real names, phone numbers, emails and a do-not-call list. Stays out of git, keeps its OneDrive backup. |
 
 ```
-index.js              server entry — express routes, then Noco.init
-import-leads.js       /app-api/import  — the drop-zone spreadsheet importer
-job-search.js         /app-api/job-search — LinkedIn search via the Apify actor
-recents.js            /app-api/recents — per-account "recently touched" trail
-public/               the front end: app.js (~1,200-line vanilla SPA), app.css, index.html
+server/               the domain API on :8080 — auth (WorkOS), leads, counts,
+                      recents, users, activity, job search, imports, migrations
+migrations/           plain SQL, applied by `node server/migrate.js` —
+                      the ONLY way the schema changes
+public/               the front end: app.js (vanilla SPA), app.css, index.html
 dashboard/
-  setup_v2.py         full rebuild: parse → split → dedupe → create → link → views
-  setup_and_import.py v1 importer; still the home of every parse_* and the cleaning helpers
+  sync.py             the everyday refresh from the source files
   import_dnc.py       bulk do-not-call application
+  setup_and_import.py the source-file parsers (collect())
+  setup_v2.py         the clustering + franchise guards (sibling of server/dedupe.js)
+  registry.py         Lead Code identity store (SQLite, beside the repo)
+  domain_api.py       how the pipeline talks to the API (service token)
   README.md           team-facing guide
-  how-it-works.html   illustrated architecture walkthrough + build guide + timeline
-  nocodb_ids.json     generated table/column ids for the Python scripts
+  how-it-works.html   illustrated architecture walkthrough + timeline
+scripts/etl-from-noco.js  the one-off SQLite→Postgres migration (recovery path)
+docker-compose.yml    dev: postgres + the NocoDB admin container
 CLAUDE.md             working notes: design decisions, gotchas, known data issues
 ```
 
 ## Running it
 
 ```bash
-node index.js          # or start-dashboard.bat
+docker compose up -d       # postgres + the NocoDB admin container
+node server/migrate.js     # apply pending migrations
+node server/index.js       # or start-dashboard.bat for all of the above
 ```
 
-- `http://localhost:8080/app` — the team UI
-- `http://localhost:8080/dashboard` — the NocoDB admin UI
+- `http://localhost:8080/app` — the team UI (sign-in via WorkOS)
+- `http://localhost:8082/dashboard` — the NocoDB admin grid (admins only)
 
 There is no build step, no test suite and no linter. The front end is plain
 HTML/CSS/JS — edit `public\` and refresh. When you change markup and script
@@ -47,25 +54,24 @@ that mixes an old file with a new one renders a blank page.
 
 ## First-time setup
 
-Three secret files, none of them in git. Copy each `.example.json` and fill it in:
-
-| File | Holds |
-|---|---|
-| `api_token.json` | A NocoDB API token — the Python scripts authenticate with it |
-| `apify_token.json` | An Apify API token for the LinkedIn job search. Never reaches the browser. |
-| `admin_credentials.json` | Super-admin seed. Only read when initialising an empty `noco.db`. |
-
+Copy `.env.example` into `.env` and `.env.server` and fill them in (compose
+passwords, `DATABASE_URL`, the WorkOS keys). The Apify token for the job
+search goes in `apify_token.json` (see its `.example.json`) or `APIFY_TOKEN`.
 Then `npm install`, and point `KARMA_LEADS_DATA` at the folder holding the raw
 exports if it is not at the default path in `dashboard/setup_and_import.py`.
 
-## Rebuilding the base
+The Python pipeline authenticates with a service token:
+`node server/cli.js token:create pipeline imports:write`, then set
+`KARMA_API_URL` / `KARMA_API_TOKEN` in its environment.
+
+## Importing leads
+
+There is no destructive rebuild any more. New files go through the app's
+import drop zone (admins) or the pipeline:
 
 ```bash
-python dashboard/setup_v2.py     # DESTRUCTIVE
+python dashboard/sync.py --dry-run   # always first; prints the plan
+python dashboard/sync.py
 ```
 
-This **deletes and recreates the base**. Statuses, owners, notes, comments,
-favourites and every member's invitation are lost; only the Blocklist survives.
-To add new files to a base the team is already using, use the app's import drop
-zone instead. See `CLAUDE.md` for the full pipeline and the list of things that
-will bite you.
+See `CLAUDE.md` for the full pipeline and the list of things that will bite you.

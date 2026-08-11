@@ -7,7 +7,9 @@ can actually work.** Mark leads contacted, leave notes, favourite them, ban numb
 we're not allowed to call, drop in new spreadsheets, and pull fresh LinkedIn job
 leads on demand.
 
-Built on [NocoDB](https://nocodb.com) with a custom front end on top.
+A custom dashboard and API over **PostgreSQL** (since the 2026-08-11
+re-architecture), with [NocoDB](https://nocodb.com) as an admins-only grid on
+the side.
 
 | | |
 |---|---|
@@ -26,16 +28,24 @@ Built on [NocoDB](https://nocodb.com) with a custom front end on top.
 Quick start
 -----------
 
-1. **Start the server** — double-click `start-dashboard.bat`.
+1. **Start everything** — double-click `start-dashboard.bat` (it brings up the
+   database and the app).
    _Leave the black window open; closing it stops the dashboard._
 2. **Open** <http://localhost:8080/app>
-3. **Sign in** with your full email address and the password from your invite.
+3. **Sign in** — the button takes you to the team sign-in page (WorkOS).
+   **First time:** choose *Sign up* there and register with **the email you
+   were invited under** — you're creating your sign-in credential, not your
+   access. Access comes from the invite.
 
-> **No shared login, and no `admin`/`admin`.** That shorthand maps to an account
-> with no access to the leads — it signs in and shows you nothing.
+> **No shared login.** An account that signs in but was never invited is told
+> "not invited — ask your manager" instead of being dropped into an empty app.
+> Admins invite people with
+> `node server/cli.js user:add name@karmastaff.com member`.
 
-<http://localhost:8080/dashboard> is the raw NocoDB admin UI, same login, used for
-inviting members. Day to day you want `/app`.
+**Two account levels.** Everyone works leads the same way; **admins** (the
+manager) additionally get 🔎 Find jobs, the import drop zone, user management,
+the NocoDB admin link, and the **Team activity** tab — a per-day chart plus a
+live feed of who did what, recorded by the server itself.
 
 > **Blank or broken page after an update?** Hard-refresh with **Ctrl+Shift+R**.
 
@@ -44,25 +54,25 @@ inviting members. Day to day you want `/app`.
 What's in it
 ------------
 
-| Table | Rows | What it is |
+| View | Rows | What it is |
 |---|---:|---|
 | **Companies** | 32,888 | Companies to call — Bitrix CRM, vendor lists, master restoration DB, adjuster lists |
 | **People** | 2,305 | Named individuals — Apollo exports, CRM rows with a contact name |
-| **Job Board** | 84 | LinkedIn postings, with the hiring contact where we have one |
-| **Segments** | 225 | Category × State groups — these power "Similar companies" |
-| **Blocklist** | 531 | Numbers we are banned from calling |
+| **Job board** | 144 | LinkedIn postings, with the hiring contact where we have one |
+| *Segments* | 221 | Category × State groups behind "Similar companies" (computed, not a table you maintain) |
+| *Blocklist* | 531 | Numbers we are banned from calling |
 
-**35,277 leads**, of which 241 sit in **Removed**. Companies and People are linked
-by company name, so opening a person shows their colleagues and opening a company
-shows everyone we know there.
+**35,337 leads**, of which 241 sit in **Removed**. Companies and People are linked,
+so opening a person shows their colleagues and opening a company shows everyone we
+know there.
 
 **The strip along the top** is six live figures — total leads, phone coverage,
 email coverage, Contacted, Qualified, and new-this-week — each with a bar showing
 the ratio behind it. Hover any number for the exact figure. They refresh on load
 and after any import, job search or status change.
 
-> **This is a calling list first.** 32,253 leads have a phone number; only 11,737
-> have an email. Worth knowing before anyone plans an email campaign off it.
+> **This is a calling list first.** 32,012 live leads have a phone number; only
+> 11,648 have an email. Worth knowing before anyone plans an email campaign off it.
 
 ---
 
@@ -73,7 +83,7 @@ Using the app
 
 - **Sidebar** — Companies · People · Job board · Recent · Favorites · Removed, each
   with a live count. Removed leads are excluded from every other view.
-- **🕐 Recent** — the last 25 leads **you** worked on: anything you opened, starred,
+- **🕐 Recent** — the last 50 leads **you** worked on: anything you opened, starred,
   re-statused, assigned or noted. It starts empty, it's yours alone, and it follows
   your sign-in rather than your browser. **Clear** empties it without touching the
   leads.
@@ -83,7 +93,9 @@ Using the app
 - **📍 State** — our sources disagree about spelling, so `FL` and `Florida` count as
   the same state. State names always display in full, never abbreviated.
 - **◉ Status** — New / Contacted / Responded / Qualified / Not interested.
-- **Pages** — first / prev / next / last, with **Show 25 / 50 / 100 / 200**.
+- **Pages** — first / prev / next, with **Show 25 / 50 / 100 / 200**. ("Last"
+  is greyed out by design — paging is now the fast kind that can't jump to an
+  arbitrary page, in exchange page 400 costs the same as page 1.)
 - **▤ ▥ ▦** row height, **Light / Dark**, and drag-to-resize panes. All remembered.
 
 ### Working a lead
@@ -98,10 +110,20 @@ Click any row to open it on the right.
 | **Status** | New → Contacted → Responded → Qualified / Not interested |
 | **★ Favorite** | From the row or the reading pane; collects under Favorites |
 | **Owner** | Type a name or email to claim the lead |
-| **Notes** | A timestamped, per-user thread — the real record of what happened |
+| **Notes** | A timestamped, per-user thread — the real record of what happened. Hover your own note for ✎ edit and 🗑 delete |
 
 **Related leads** shows people at that company, its open job postings, and similar
 companies.
+
+### Team activity (admins)
+
+The **Team activity** tab in the sidebar is the manager's view of the whole
+team: a per-day bar chart split by person, and a live feed — *"sarah set Acme
+Restoration to Qualified · 10m ago"* — where every entry clicks through to the
+lead. It's fed by the server's own log of every status change, note, removal,
+import and job search, so it can't be gamed from a browser. Pick 7 / 30 / 90
+days at the top. The log started at the migration cutover, so it fills in as
+the team works.
 
 ### Browsing a whole segment
 
@@ -110,16 +132,15 @@ Under **Similar companies**, the blue tag names the group — `Restoration · Ne
 paged like any other view. A blue banner and a **← Back to Companies** button make it
 obvious where you are.
 
-Search, state and status filters still apply inside a segment. **Sorting doesn't** —
-segments come back in a fixed order, so the control reads *Segment order* and is
-greyed out.
+Search, state and status filters still apply inside a segment — and since the
+re-architecture, **sorting works there too**.
 
 ---
 
 Adding leads
 ------------
 
-### Drop a spreadsheet on it
+### Drop a spreadsheet on it (admins)
 
 Click **⬆ Import leads**, or drag an `.xlsx`, `.xls` or `.csv` anywhere onto the
 window. There's no manual add-a-lead form — leads arrive from a file or a job search.
@@ -134,7 +155,7 @@ window. There's no manual add-a-lead form — leads arrive from a file or a job 
 The result panel reports what landed where and what was skipped. A few thousand rows
 takes a few seconds — don't close the window while it runs.
 
-### 🔎 Find jobs — live LinkedIn postings
+### 🔎 Find jobs — live LinkedIn postings (admins)
 
 **🔎 Find jobs** searches live postings and drops results into the Job board.
 **⚙** beside it opens the settings. It comes pre-loaded with our standard search:
@@ -178,7 +199,8 @@ To undo: open it in **Removed** → **↩**.
 
 ### A whole file
 
-Drop the CSV in `dnc/` and run:
+Drop the CSV in `dnc/` and run (same `KARMA_API_URL` / `KARMA_API_TOKEN`
+environment as `sync.py`):
 
 ```
 python dashboard/import_dnc.py --dry-run     # preview — always do this first
@@ -195,7 +217,10 @@ and favourites all survive. Re-running next month only applies the difference.
 Refreshing the data
 -------------------
 
-### Normal refresh — use this one
+### Normal refresh
+
+Needs two environment variables (ask the admin — the token comes from
+`node server/cli.js token:create`): `KARMA_API_URL` and `KARMA_API_TOKEN`.
 
 ```
 python dashboard/sync.py --dry-run     # prints the plan, writes nothing
@@ -210,46 +235,42 @@ whether you've qualified someone.
 A lead that disappears from an export is left exactly where it is. Exports change all
 the time; that isn't evidence a business closed. Use 🚫 when you want a lead gone.
 
-### Full rebuild — rarely needed
+### Changing the table structure
 
-```
-python dashboard/setup_v2.py
-```
+There is no destructive rebuild any more. Schema changes are SQL files in
+`migrations/`, applied with `node server/migrate.js` — statuses, invitations
+and row ids all survive. (`setup_v2.py` remains only as the home of the
+dedupe functions `sync.py` imports.)
 
-**Destructive.** It's for changing the *structure* of the tables, not for getting new
-leads in.
-
-| ✅ Survives | ❌ Lost |
-|---|---|
-| Statuses, owners, favourites, notes | Member invitations — everyone must be re-invited |
-| The blocklist | Row ids, so old deep links break |
-| Every lead's **Lead Code** | — |
-
-Work product survives because it's stored against each lead's permanent **Lead Code**
-(`KL-7QX4M2H8ZB`) in `lead_registry.db`, not against its row number.
-
-> ⚠️ **`lead_registry.db` is the one file here that cannot be regenerated.**
-> `noco.db` can be rebuilt from the source files; the codes cannot. Keep a backup
-> **somewhere other than this folder** — the automatic `lead_registry.db.bak-*`
-> snapshots are on the same disk.
+> ⚠️ Every lead's permanent **Lead Code** (`KL-7QX4M2H8ZB`) is the identity
+> everything hangs off. The codes live in PostgreSQL now and in
+> `lead_registry.db` (the pipeline's copy) — the nightly `pg_dump` in the
+> production stack covers the first; keep a copy of the second off-machine.
 
 ---
 
 Team access
 -----------
 
-1. Sign in as `pema@karmastaff.com` → click **Karma Leads** → **Members**.
-2. Invite by email as **Editor** — they can change statuses, notes and owners, but
-   not the table structure.
-3. They open <http://localhost:8080/app> on **this** computer, or over the network at
-   `http://<this-PC's-IP>:8080` (allow port 8080 through Windows Firewall first).
+1. **Invite them** (this is what grants access and sets the level):
+   `node server/cli.js user:add name@karmastaff.com member` — or `admin` for
+   the manager. Roles live in the app's own database; the sign-in provider has
+   no say in them.
+2. **They sign up**: at <http://localhost:8080/app> they click **Sign in**,
+   choose *Sign up* on the hosted page, and register **with that exact
+   email**. Order doesn't matter — signing up before being invited just shows
+   "not invited" until step 1 happens.
 
-An account that can sign in but hasn't been invited is told so on the login screen
-rather than dropped into an empty app.
+Over the network it's `http://<this-PC's-IP>:8080` (allow port 8080 through
+Windows Firewall first).
 
-> **Thinking about hosting this properly?** `how-it-works.html` has a costed
-> walkthrough — roughly **$30–50/month** for ~50 daily users, what breaks on deploy,
-> and how admin vs user mode should work.
+To promote, demote or disable someone later: the same `user:add` command
+updates the role in place, and disabling is available to admins through the
+API. The last remaining admin can't demote or disable themselves.
+
+> **Hosting it properly** is ready when we are: `docker-compose.prod.yml` runs
+> the same stack on any Docker host with TLS and nightly backups —
+> `how-it-works.html` has the story.
 
 ---
 
@@ -260,7 +281,8 @@ Troubleshooting
 |---|---|
 | Page is blank or half-broken | Hard-refresh: **Ctrl+Shift+R** |
 | "This site can't be reached" | Server isn't running — start `start-dashboard.bat` |
-| Signed in but no leads | That account was never invited to the base. Re-invite as Editor |
+| "… is not invited to Karma Leads" | You signed in with an email nobody invited. Ask an admin for `user:add`, or sign in with the invited address |
+| Sign-in page itself errors ("redirect uri invalid") | The callback URL isn't allowlisted in the WorkOS dashboard → Redirects |
 | Import says "no recognisable columns" | The header row isn't the first row, or the columns have unusual names |
 | Counts look wrong after removing leads | Refresh — counts recalculate on load |
 | Job search returns 0 jobs | Settings too narrow. Widen **Posted within** first. Nothing is charged |
@@ -274,15 +296,14 @@ Files
 
 | | |
 |---|---|
-| **App folder** | `C:\Users\David\karma-leads-nocodb` — deliberately outside OneDrive, because a live SQLite file shouldn't be cloud-synced |
-| **Database** | `noco.db`, ~13 MB. Back up by copying that one file while the server is stopped |
-| **Identity registry** | `lead_registry.db` — **the system of record.** Back this up off-machine |
-| **Front end** | `public\` — plain HTML/CSS/JS, no build step. Edit and refresh |
-| **Server modules** | `import-leads.js`, `job-search.js`, `recents.js` |
-| **Apify key** | `apify_token.json` — never leaves the server; the browser only talks to our own `/app-api` routes |
-| **API token** | `api_token.json` |
-| **Table/column IDs** | `dashboard/nocodb_ids.json` |
-| **Source spreadsheets** | `old leads/`, `master_leads/`, `New_job_search/` |
+| **App folder** | `C:\Users\David\karma-leads-nocodb` |
+| **Database** | PostgreSQL in Docker (`docker compose up -d`) — `karma` is the application, `nocodb_meta` is NocoDB's own |
+| **The API + app** | `server\` (Node) and `public\` (plain HTML/CSS/JS, no build step — edit and refresh) |
+| **Identity registry** | `lead_registry.db` — the pipeline's code registry. Keep a copy off-machine |
+| **Old database** | `noco.db` — the pre-migration SQLite, kept as a backup, no longer served |
+| **Apify key** | `apify_token.json` (or the `APIFY_TOKEN` env var) — never leaves the server |
+| **Secrets** | `.env` and `.env.server` — see `.env.example` for why there are two |
+| **Source spreadsheets** | `old leads/`, `master_leads/`, `New_job_search/` (outside the repo) |
 
 ### Known data quirks
 

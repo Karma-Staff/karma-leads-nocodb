@@ -7,7 +7,7 @@
 <!-- geometric K, drawn rather than typeset, so it matches the mark in the app -->
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%232f54eb'/><path d='M11 7.5v17M11 16l9.5-8.5M11 16l9.5 8.5' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round' fill='none'/></svg>">
 <!-- bump ?v= whenever app.js/app.css change so no one gets a half-old app -->
-<link rel="stylesheet" href="app.css?v=14">
+<link rel="stylesheet" href="app.css?v=17">
 </head>
 <body>
 
@@ -21,18 +21,10 @@
       </svg>
       <span class="wordmark"><b>Karma</b>Leads</span>
     </div>
-    <p class="login-sub">Sign in with your team account</p>
-    <form id="login-form">
-      <label>Email
-        <input type="email" id="login-email" autocomplete="username"
-               placeholder="you@karmastaff.com" required>
-      </label>
-      <label>Password
-        <input type="password" id="login-password" autocomplete="current-password" required>
-      </label>
-      <div id="login-error" class="login-error hidden"></div>
-      <button type="submit" class="btn-primary btn-block">Sign in</button>
-    </form>
+    <p class="login-sub" id="login-sub">Continue to the team sign-in</p>
+    <!-- sign-in happens on WorkOS's hosted page; this button just goes there -->
+    <button id="login-workos" class="btn-primary btn-block">Sign in</button>
+    <div id="login-error" class="login-error hidden"></div>
   </div>
 </div>
 
@@ -63,7 +55,10 @@
             <div id="menu-name" class="dd-name"></div>
             <div id="menu-email" class="dd-email"></div>
           </div>
-          <a href="/dashboard" target="_blank" class="dropdown-item">Open NocoDB admin</a>
+          <!-- admin-only surfaces ship hidden and are revealed in boot() once
+               /api/me answers with the role. Starting hidden means a member
+               never sees them flash; the real control is the API's 403s. -->
+          <a href="/dashboard" target="_blank" class="dropdown-item admin-only hidden">Open NocoDB admin</a>
           <button id="logout-btn" class="dropdown-item">Sign out</button>
         </div>
       </div>
@@ -127,13 +122,19 @@
       <button class="nav-item" data-tab="removed">
         <svg class="nav-ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.2"/><path d="m6.2 6.2 11.6 11.6"/></svg>
         Removed <span class="nav-count" id="count-removed"></span></button>
+
+      <div class="nav-section admin-only hidden">Manage</div>
+      <button class="nav-item admin-only hidden" data-tab="stats">
+        <svg class="nav-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V4M4 20h16M7.6 20v-5.2M12 20V9.4M16.4 20v-7.8"/></svg>
+        Team activity</button>
+
       <div class="sidebar-foot">
-        <div class="job-search-row">
+        <div class="job-search-row admin-only hidden">
           <button id="job-search-btn" class="btn-primary">🔎 Find jobs</button>
           <button id="job-search-settings" class="btn-ghost btn-gear" title="Job search settings">⚙</button>
         </div>
-        <div id="credits-line" class="credits-line" title="Apify credits remaining this billing cycle"></div>
-        <button id="import-btn" class="btn-primary btn-block">⬆ Import leads</button>
+        <div id="credits-line" class="credits-line admin-only hidden" title="Apify credits remaining this billing cycle"></div>
+        <button id="import-btn" class="btn-primary btn-block admin-only hidden">⬆ Import leads</button>
       </div>
     </nav>
 
@@ -199,6 +200,28 @@
       </div>
       <div id="detail" class="detail hidden"></div>
     </section>
+
+    <!-- Team activity: admin-only, full width — it replaces the list and
+         reading panes rather than sitting beside them. Filled by renderStats(). -->
+    <section class="stats-pane hidden" id="stats-pane">
+      <div class="stats-head">
+        <div class="list-title-wrap">
+          <div class="seg-eyebrow">Manage</div>
+          <h2>Team activity</h2>
+        </div>
+        <div class="list-filters">
+          <label class="ctl"><span class="ctl-ic">🗓</span>
+            <select id="act-days" title="Time window">
+              <option value="7">Last 7 days</option>
+              <option value="30" selected>Last 30 days</option>
+              <option value="90">Last 90 days</option>
+            </select>
+          </label>
+          <button id="act-refresh" class="btn-ghost" title="Reload the log">Refresh</button>
+        </div>
+      </div>
+      <div id="stats-body" class="stats-body"></div>
+    </section>
   </div>
 </div>
 
@@ -212,6 +235,6 @@
   </div>
 </div>
 
-<script src="app.js?v=14"></script>
+<script src="app.js?v=18"></script>
 </body>
 </html>

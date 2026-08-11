@@ -164,11 +164,16 @@ def _migrate(con):
 
 
 def backup(path=None):
-    """Copy the registry aside before anything destructive touches it."""
+    """Copy the registry aside before anything destructive touches it.
+
+    Snapshots land in backups/ beside the registry, so they don't pile up in
+    the repo root."""
     src = Path(path or DB)
     if not src.exists():
         return None
-    dst = src.with_suffix(f".db.bak-{datetime.now():%Y%m%d-%H%M%S}")
+    bak_dir = src.parent / "backups"
+    bak_dir.mkdir(exist_ok=True)
+    dst = bak_dir / f"{src.stem}.db.bak-{datetime.now():%Y%m%d-%H%M%S}"
     con = sqlite3.connect(src)
     try:                                    # online backup: WAL-safe, no lock games
         out = sqlite3.connect(dst)

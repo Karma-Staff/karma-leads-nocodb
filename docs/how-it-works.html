@@ -254,12 +254,28 @@
   Claude Code.
 </p>
 
+<div class="note">
+  <strong>Re-architected 2026-08-11.</strong> The system now runs on PostgreSQL
+  behind a purpose-built API, with WorkOS for sign-in and NocoDB demoted to an
+  admins-only grid — the <a href="#big-picture">big picture</a> below and the
+  <a href="#timeline">timeline</a> describe the current shape. The middle
+  sections (<a href="#model">data model</a> through
+  <a href="#build">building one of these</a>) deliberately keep telling the
+  original SQLite-era story: that is the build guide and the reasoning trail,
+  and the ideas in it — lead codes, the franchise guards, the import
+  discipline — all survived the move unchanged. Where a mechanism was
+  replaced, the timeline entry says what replaced it;
+  <span class="file">CLAUDE.md</span> is the always-current reference.
+</div>
+
 <!-- ============================================================ -->
 <h2 id="big-picture">The big picture</h2>
 
 <p>
-  Three moving parts, all on one Windows machine. Nothing is hosted anywhere; the
-  whole system is a Node process listening on port 8080 with a SQLite file next to it.
+  Since the 2026-08-11 re-architecture: a custom domain API over PostgreSQL,
+  with the same front end on top. Still one Windows machine for now, but every
+  piece runs unchanged from <span class="file">docker-compose.prod.yml</span>
+  on any Docker host when hosting day comes.
 </p>
 
 <div class="diagram">
@@ -268,26 +284,28 @@
       <div class="p">spreadsheets · LinkedIn via Apify</div>
     </div>
     <span class="arrow">→</span>
-    <div class="box hi"><b>NocoDB + Express</b>
-      <div class="p">node index.js · :8080 · noco.db</div>
+    <div class="box hi"><b>Domain API</b>
+      <div class="p">node server/index.js · :8080 · serves /app too</div>
     </div>
     <span class="arrow">→</span>
-    <div class="box"><b>The app</b>
-      <div class="p">/app — vanilla HTML/CSS/JS</div>
+    <div class="box"><b>PostgreSQL 17</b>
+      <div class="p">docker · db "karma"</div>
     </div>
   </div>
-  <div class="down">▲ three ways in ▲</div>
+  <div class="down">▲ three ways in, all through the API ▲</div>
   <div class="grid2">
-    <div class="box"><b>Path A — full rebuild</b>
-      <div class="p">python dashboard/setup_v2.py</div>
-      Destructive. Wipes and recreates everything from the files.
+    <div class="box"><b>Path A — pipeline sync</b>
+      <div class="p">python dashboard/sync.py → import jobs</div>
+      The everyday refresh. Non-destructive; schema changes are SQL
+      migrations now, and the old wipe-and-rebuild is gone.
     </div>
     <div class="box"><b>Path B — drop zone</b>
-      <div class="p">POST /app-api/import → import-leads.js</div>
-      Additive. Drag a file onto the app; nobody's work is touched.
+      <div class="p">POST /api/import-jobs (admins)</div>
+      Additive. Drag a file onto the app; parsed off-thread, deduped with
+      the franchise guards, committed in one transaction.
     </div>
     <div class="box"><b>Path C — job search</b>
-      <div class="p">POST /app-api/job-search → job-search.js</div>
+      <div class="p">POST /api/job-search (admins)</div>
       Additive, and the only path that costs money. Queries LinkedIn
       through Apify and appends to the job board.
     </div>
@@ -295,11 +313,17 @@
 </div>
 
 <p>
-  NocoDB supplies the database, the REST API, authentication and an admin UI.
-  Everything the team touches day to day is the custom front end at
-  <code>/app</code>, which is <em>only</em> an API client — it has no server of its
-  own and stores nothing except a JWT and a few preferences in
-  <code>localStorage</code>.
+  Around the core: <b>WorkOS AuthKit</b> owns sign-in (hosted login page,
+  sealed session cookie — we store no passwords), while the API's own
+  <code>app_users</code> table decides who is invited and who is an
+  <b>admin</b> versus a <b>member</b>. <b>NocoDB</b> survives as an
+  admins-only grid in a Docker container (:8082), attached to the same
+  PostgreSQL through a role that can edit rows but not the schema. Every
+  mutation the team makes is written to an append-only
+  <code>activity_log</code> by the API itself, which feeds the admin's
+  <b>Team activity</b> tab. The front end at <code>/app</code> is still
+  <em>only</em> an API client — no framework, no build step, nothing stored
+  beyond a session and a few preferences.
 </p>
 
 <div class="note">
@@ -311,35 +335,30 @@
 
 <h3>The server, in full</h3>
 <p>
-  <span class="file">index.js</span> is ~110 lines and does exactly three things:
-  serve the front end, register our own <code>/app-api</code> routes, then hand
-  everything else to NocoDB.
+  <span class="file">server/index.js</span> serves the front end and mounts one
+  router per concern — every endpoint the app or the pipeline uses is
+  hand-written, nothing is a generic table API any more:
 </p>
 <pre><code><span class="cmt">// static front end, with revalidation so a stale app.js can't half-load</span>
-app.use("/app", express.static(path.join(__dirname, "public"), {
-  etag: true,
-  setHeaders: (res) =&gt; res.setHeader("Cache-Control", "no-cache"),
-}));
+app.use("/app", express.static(..., { etag: true, "Cache-Control": "no-cache" }));
 
-<span class="cmt">// our own routes — ALL must come before Noco.init or they never see a request</span>
-app.post("/app-api/import",     express.raw({ type: "*/*", limit: "80mb" }), …);
-app.post("/app-api/job-search", express.json({ limit: "64kb" }), …);
-app.get ("/app-api/apify-usage", …);              <span class="cmt">// credits for the ⚙ panel</span>
-app.get/post/delete("/app-api/recents", …);       <span class="cmt">// the Recent trail</span>
-
-app.use(await Noco.init({}, httpServer, app));   <span class="cmt">// 3-arg form; Noco.init({}) crashes</span></code></pre>
-
-<div class="warn">
-  <strong>Order matters.</strong> <code>Noco.init</code> installs a catch-all router.
-  Any route registered after it is unreachable — you'll get NocoDB's 404 instead of
-  your handler.
-</div>
+auth.mountAuthRoutes(app);            <span class="cmt">// WorkOS login/callback/logout</span>
+app.use(require("./leads").router);   <span class="cmt">// list · detail · patch · remove · notes</span>
+app.use(require("./counts").router);  <span class="cmt">// the whole KPI row in one cached query</span>
+app.use(require("./recents").router); <span class="cmt">// the per-account Recent trail</span>
+app.use(require("./users").router);   <span class="cmt">// admin: invite / promote / disable</span>
+app.use(require("./jobsearch").router);<span class="cmt">// admin: Apify — the token never leaves here</span>
+app.use(require("./imports").router); <span class="cmt">// import jobs: drop zone AND the pipeline</span>
+app.get("/api/activity", ...);        <span class="cmt">// admin: the Team activity summary</span></code></pre>
 
 <p>
-  Every <code>/app-api</code> route requires the caller's own <code>xc-auth</code>
-  JWT and acts as that user, so NocoDB's permissions still apply to anything these
-  routes write. The routes exist for the three jobs the REST API can't do: parsing a
-  spreadsheet, holding a secret, and keeping a per-person activity trail.
+  Two design rules run through all of it. <b>Authorization is the API's job</b>:
+  members get 403s on admin surfaces (job search, imports, user management,
+  activity) no matter what the front end shows, and the pipeline's service
+  token can reach <em>only</em> the import endpoints. And <b>the log is written
+  where the change happens</b>: each mutation inserts its
+  <code>activity_log</code> row inside the same transaction, so the Team
+  activity tab reflects what the server did, not what a browser claimed.
 </p>
 
 <!-- ============================================================ -->
@@ -351,23 +370,34 @@ app.use(await Noco.init({}, httpServer, app));   <span class="cmt">// 3-arg form
 </p>
 
 <table>
-  <tr><th>Folder</th><th>What it holds</th><th>Editing it…</th></tr>
+  <tr><th>Where</th><th>What it holds</th><th>Editing it…</th></tr>
   <tr>
-    <td><span class="file">…\GitHub\KarmaLeads\</span><br><span class="p">the repo</span></td>
-    <td>Source spreadsheets, the Python rebuild scripts, all documentation</td>
-    <td>…changes what a <em>rebuild</em> produces. No effect on the running app.</td>
+    <td><span class="file">…\GitHub\KarmaLeads\</span><br><span class="p">the exports</span></td>
+    <td>The raw source spreadsheets (real names, phones, a DNC list — kept off GitHub)</td>
+    <td>…changes what the next <code>sync.py</code> run imports. No effect on the running app.</td>
   </tr>
   <tr>
-    <td><span class="file">C:\Users\David\karma-leads-nocodb\</span><br><span class="p">the app</span></td>
-    <td>The Node server, <code>public/</code> front end, <code>import-leads.js</code>, and <code>noco.db</code></td>
-    <td>…changes the live dashboard immediately (front end) or after a restart (server).</td>
+    <td><span class="file">C:\Users\David\karma-leads-nocodb\</span><br><span class="p">the repo &amp; the app</span></td>
+    <td><code>server/</code> (the API), <code>public/</code> (front end),
+        <code>migrations/</code>, <code>dashboard/</code> (the Python pipeline),
+        the compose files</td>
+    <td>…changes the live dashboard immediately (front end, bump <code>?v=</code>)
+        or after a restart (server).</td>
+  </tr>
+  <tr>
+    <td><b>PostgreSQL</b><br><span class="p">docker volume</span></td>
+    <td>The data itself — leads, notes, users, the activity log — in the
+        <code>karma</code> database (NocoDB's metadata sits apart in
+        <code>nocodb_meta</code>)</td>
+    <td>…is done through the API or the admin grid; the schema only ever changes
+        via <code>node server/migrate.js</code>.</td>
   </tr>
 </table>
 
 <p>
-  The app folder sits outside OneDrive deliberately: <code>noco.db</code> is a live
-  SQLite file, and cloud-syncing a database that's being written to is a good way to
-  corrupt it.
+  The old <code>noco.db</code> SQLite file still sits in the repo folder as the
+  frozen pre-migration backup, and <code>lead_registry.db</code> remains the
+  pipeline's identity store — keep a copy of that one off this machine.
 </p>
 
 <!-- ============================================================ -->
@@ -665,7 +695,7 @@ app.use(await Noco.init({}, httpServer, app));   <span class="cmt">// 3-arg form
   made it a near-empty tab nobody opened twice.
 </p>
 <p>
-  It now holds the last <b>25 leads you personally touched</b>, newest first:
+  It now holds the last <b>50 leads you personally touched</b>, newest first:
   opened, starred, re-statused, re-assigned, or noted. It starts empty for a new
   account and fills as you work. Every one of those actions calls
   <code>touchLead()</code>, which POSTs to <code>/app-api/recents</code> and moves
@@ -1400,8 +1430,24 @@ df.groupby(phone_key).size().sort_values(ascending=False).head(20)</code></pre>
 
 <!-- ============================================================ -->
 <h2 id="deploy">Going live: hosting, roles and what it costs</h2>
+
+<div class="note">
+  <strong>Partly overtaken by the re-architecture.</strong> This section was
+  written for the SQLite-era system, and the move to PostgreSQL + the domain
+  API already resolved most of its worries: the database is no longer a file a
+  deploy can wipe (it's a Docker volume with a nightly <code>pg_dump</code>
+  service), roles and the Apify gate <a href="#deploy-roles">shipped</a>,
+  sign-in is WorkOS, and the deploy artifact is
+  <span class="file">docker-compose.prod.yml</span> + a Caddyfile rather than a
+  hand-built service. The cost table also skews high now — NocoDB's 300–500 MB
+  idle footprint is out of the request path, so the API fits comfortably in a
+  small instance. What still holds: don't use a sleeping free tier, the Python
+  importers stay local (they read OneDrive exports and now talk to the hosted
+  API with a service token), and HTTPS makes the clipboard work.
+</div>
+
 <p>
-  Everything above assumes one machine on a desk. Putting it in front of ~50 people
+  Everything below assumes one machine on a desk. Putting it in front of ~50 people
   a day changes five things, in rough order of how quickly they bite.
 </p>
 
@@ -1443,34 +1489,33 @@ df.groupby(phone_key).size().sort_values(ascending=False).head(20)</code></pre>
   </li>
 </ol>
 
-<h3 id="deploy-roles">Admin mode and user mode</h3>
+<h3 id="deploy-roles">Admin mode and user mode <span class="tag">shipped 2026-08-11</span></h3>
 <p>
-  Most of this already exists and is simply unused. NocoDB owns authentication and
-  roles, the front end signs in against it, and <span class="file">app.js</span>
-  already fetches <code>/api/v1/auth/user/me</code> into <code>S.me</code> — it just
-  never reads the roles it gets back. Record-level permissions are genuinely already
-  enforced, because both the app and the drop-zone import use the <em>caller's</em>
-  JWT rather than the API token.
+  This section used to be a plan; it is now how the system works. Sign-in is
+  WorkOS AuthKit's hosted page — no passwords stored here, sealed session in an
+  httpOnly cookie — and <em>authorization</em> is the domain API's own
+  <code>app_users</code> + <code>organization_memberships</code> tables. Being
+  able to sign in is not being invited: an authenticated email that isn't in
+  the roster bounces off with "not invited — ask your manager".
 </p>
 <table>
-  <tr><th>Role</th><th>Sees</th></tr>
-  <tr><td><b>Owner / Creator</b> — admin</td>
-      <td>the NocoDB admin UI at <code>/dashboard</code>, spreadsheet import,
-          blocklist management, 🔎 Find jobs</td></tr>
-  <tr><td><b>Editor</b> — the team</td>
-      <td><code>/app</code>: work leads, set status, owner, notes, favourites</td></tr>
-  <tr><td><b>Commenter / Viewer</b></td><td>read-only</td></tr>
+  <tr><th>Level</th><th>Gets</th></tr>
+  <tr><td><b>admin</b> — the manager</td>
+      <td>everything below, plus 🔎 Find jobs and the Apify spend panel,
+          the import drop zone, user management, the NocoDB admin grid, and
+          the <b>Team activity</b> tab (per-person daily chart + live feed
+          from the server-written log)</td></tr>
+  <tr><td><b>member</b> — the team</td>
+      <td><code>/app</code>: work leads — status, owner, notes, favourites,
+          remove/restore, every list view</td></tr>
 </table>
-<div class="danger">
-  <strong>There is one real hole, and it is a budget leak.</strong>
-  <code>/app-api/job-search</code> checks only that a JWT exists — not what role
-  the caller holds — and then spends <em>your</em> Apify token at $5 per 1,000
-  results. With one user on localhost that is fine. With 50 logins it is an
-  uncapped spend that anyone can trigger. The fix is small:
-  <span class="file">recents.js</span> already shows the pattern — ask
-  <code>/api/v1/auth/user/me</code> with the caller's own JWT and reject non-admins.
-  Do it <strong>server-side</strong>; hiding the button in the front end is
-  cosmetics, not a control.
+<div class="note">
+  <strong>The budget leak this box used to warn about is closed.</strong>
+  <code>/api/job-search</code> and the spend dashboards now reject non-admins
+  <em>server-side</em> — hiding the button was never the control, the 403 is.
+  Invitations: <code>node server/cli.js user:add name@karmastaff.com
+  member</code> (or <code>admin</code>); the roster and roles live in
+  PostgreSQL, and the last admin cannot demote or disable themselves.
 </div>
 
 <h3 id="deploy-cost">What it costs</h3>
@@ -1578,7 +1623,7 @@ df.groupby(phone_key).size().sort_values(ascending=False).head(20)</code></pre>
     <div class="what">Recent becomes an activity trail</div>
     <div class="why">"Added in the last 30 days" was a fact about the data, not
       about anything anyone did — and on years-old exports it was a near-empty
-      tab. Rebuilt as the last 25 leads <em>you</em> touched, stored server-side
+      tab. Rebuilt as the last 50 leads <em>you</em> touched, stored server-side
       per account so it follows the person between browsers.</div>
   </li>
   <li>
@@ -1730,51 +1775,112 @@ df.groupby(phone_key).size().sort_values(ascending=False).head(20)</code></pre>
       in but not <em>who you are</em> — so any of 50 logins could spend the Apify
       budget. Nothing here is deployed yet; this is the plan, not the state.</div>
   </li>
+  <li>
+    <div class="when">2026-08-11</div>
+    <div class="what">The re-architecture: PostgreSQL + a domain API
+      <span class="tag">rewrite</span></div>
+    <div class="why">The embedded-NocoDB-over-SQLite design hit its structural
+      limits (no indexes on anything the app filters by, ~26 count queries per
+      login, a 1,000-row correctness cap on Favorites/Removed, one writer), so
+      the data moved to PostgreSQL behind a purpose-built API
+      (<span class="file">server/</span>) and NocoDB was demoted to an
+      admin-only grid over the same tables — row access, no DDL, its metadata
+      in a separate database. The three lead tables became one
+      <code>leads</code> table with a <code>kind</code> column; Segments became
+      a <code>GROUP BY</code>; comments, recents and the new append-only
+      activity log became first-class tables. Everything the team does is now
+      logged server-side with who/what/from→to, feeding an admin-only
+      <b>Team activity</b> tab — and the Apify hole is closed: job search,
+      import and the spend dashboards are admin-gated at the API. The Python
+      pipeline kept its parsers and its registry untouched and swapped its
+      5-line HTTP helper for scoped import-job endpoints; the first
+      post-migration sync resolved all 35,243 clusters to their existing codes
+      — <b>0 minted, 0 merged</b>. Warm numbers: the KPI refresh went from ~26
+      requests to one 2&nbsp;ms call; a filtered, sorted page reads in
+      ~10&nbsp;ms.</div>
+  </li>
+  <li>
+    <div class="when">2026-08-11 · later</div>
+    <div class="what">WorkOS sign-in + the clean slate
+      <span class="tag now">current</span></div>
+    <div class="why">Authentication moved to WorkOS AuthKit's hosted login the
+      same day: no passwords stored here, a sealed session cookie, and the
+      app's own roster deciding who is invited and who is an admin — an
+      authenticated stranger is turned away by the callback, not by hiding
+      buttons. The legacy NocoDB server (:8081) and its adapter were then
+      deleted outright — WorkOS is the only door. The
+      migration then got its final clean pass — ETL re-run from the frozen
+      <span class="file">noco.db</span>, test residue wiped, the activity log
+      started fresh, and a converging <span class="file">sync.py</span> run
+      confirming zero drift. Still ahead: the cloud deploy
+      (<span class="file">docker-compose.prod.yml</span> + Caddy + nightly
+      pg_dump are written and waiting on a host and a domain).</div>
+  </li>
 </ul>
 
 <!-- ============================================================ -->
 <h2 id="files">File map</h2>
 <table>
-  <tr><th>File</th><th>Lines</th><th>What it does</th></tr>
-  <tr><td><span class="file">karma-leads-nocodb/index.js</span></td><td class="num">126</td>
-      <td>Serves <code>/app</code>, registers every <code>/app-api</code> route, starts NocoDB</td></tr>
-  <tr><td><span class="file">karma-leads-nocodb/import-leads.js</span></td><td class="num">450</td>
-      <td>Spreadsheet → parsed → deduped → inserted. Carries the JavaScript port of
-          <code>aliases()</code> and the three merge guards. Also exports the shared
-          NocoDB helpers (<code>nc</code>, <code>discover</code>,
-          <code>insertAll</code>) that the job search reuses</td></tr>
-  <tr><td><span class="file">karma-leads-nocodb/job-search.js</span></td><td class="num">281</td>
-      <td>Apify actor call, input whitelist, job dedupe, cost and credit reporting</td></tr>
-  <tr><td><span class="file">karma-leads-nocodb/recents.js</span></td><td class="num">106</td>
-      <td>Per-account activity trail behind the Recent tab</td></tr>
-  <tr><td><span class="file">karma-leads-nocodb/public/app.js</span></td><td class="num">1917</td>
-      <td>The whole front end</td></tr>
-  <tr><td><span class="file">karma-leads-nocodb/public/app.css</span></td><td class="num">699</td>
-      <td>Styling, light and dark, three row densities, the KPI row</td></tr>
-  <tr><td><span class="file">karma-leads-nocodb/public/index.html</span></td><td class="num">183</td>
-      <td>Shell markup — versioned asset links live here</td></tr>
-  <tr><td><span class="file">karma-leads-nocodb/apify_token.json</span></td><td class="num">—</td>
-      <td>Apify key. Server-side only; never served to the browser</td></tr>
-  <tr><td><span class="file">dashboard/setup_v2.py</span></td><td class="num">878</td>
-      <td>Destructive rebuild: cluster, resolve codes, harvest work, split, link,
-          segment, views. Home of <code>cluster()</code>, <code>aliases()</code> and
-          <code>keysets_for()</code></td></tr>
-  <tr><td><span class="file">dashboard/sync.py</span></td><td class="num">225</td>
-      <td><b>The everyday path.</b> Non-destructive refresh: insert new, update
-          changed fields, never delete</td></tr>
-  <tr><td><span class="file">dashboard/registry.py</span></td><td class="num">397</td>
-      <td>Lead codes, the natural-key crosswalk, work product and notes.
-          Run it directly to inspect the registry or explain one code</td></tr>
-  <tr><td><span class="file">dashboard/setup_and_import.py</span></td><td class="num">602</td>
-      <td>v1 importer, still the home of every file parser, every cleaning helper,
-          and the state backfill</td></tr>
-  <tr><td><span class="file">lead_registry.db</span></td><td class="num">—</td>
-      <td><b>The system of record.</b> The only thing here that cannot be
-          regenerated — back it up off this machine</td></tr>
-  <tr><td><span class="file">dashboard/nocodb_ids.json</span></td><td class="num">—</td>
-      <td>Table/column ids, regenerated by each rebuild, read by the Python scripts</td></tr>
-  <tr><td><span class="file">dashboard/blocklist.json</span></td><td class="num">—</td>
-      <td>Optional seed list of banned numbers, applied on rebuild</td></tr>
+  <tr><th>File</th><th>What it does</th></tr>
+  <tr><td><span class="file">server/index.js</span></td>
+      <td>The domain API entry: serves <code>/app</code>, mounts every router,
+          redirects <code>/dashboard</code> to the admin grid</td></tr>
+  <tr><td><span class="file">server/leads.js</span></td>
+      <td>Every lead read and mutation: keyset-paged lists, embedded related
+          rows, status/owner/favorite, remove-as-phone-ban, notes</td></tr>
+  <tr><td><span class="file">server/auth.js</span></td>
+      <td>WorkOS AuthKit (login/callback/logout, sealed sessions, the
+          invited-only gate) plus the dying NocoDB adapter</td></tr>
+  <tr><td><span class="file">server/imports.js</span> · <span class="file">import-worker.js</span></td>
+      <td>Import jobs — the drop zone and the pipeline share one contract:
+          staged batches, idempotency, commit with dedupe, DNC bulk bans</td></tr>
+  <tr><td><span class="file">server/dedupe.js</span></td>
+      <td><b>The</b> JavaScript identity implementation: parsers, phone-key
+          rejection, <code>aliases()</code> and the three franchise guards,
+          lead-code minting</td></tr>
+  <tr><td><span class="file">server/counts.js</span> · <span class="file">recents.js</span> ·
+          <span class="file">activity.js</span> · <span class="file">users.js</span> ·
+          <span class="file">jobsearch.js</span></td>
+      <td>The KPI aggregate, the Recent trail, the team log + its summary,
+          user management, the Apify search</td></tr>
+  <tr><td><span class="file">server/migrate.js</span> · <span class="file">migrations/</span></td>
+      <td>The only way the schema changes — sequential SQL, applied in
+          transactions</td></tr>
+  <tr><td><span class="file">server/cli.js</span></td>
+      <td><code>user:add</code>, <code>token:create/revoke/list</code> —
+          invitations and pipeline credentials</td></tr>
+  <tr><td><span class="file">public/app.js</span> · <span class="file">app.css</span> ·
+          <span class="file">index.html</span></td>
+      <td>The whole front end — still no framework, no build; bump
+          <code>?v=</code> on change</td></tr>
+  <tr><td><span class="file">dashboard/sync.py</span></td>
+      <td><b>The everyday path.</b> Parses the exports, resolves codes against
+          the registry, uploads one import job — insert new, update moved
+          facts, never delete</td></tr>
+  <tr><td><span class="file">dashboard/domain_api.py</span></td>
+      <td>The pipeline's whole HTTP surface: service-token auth from env vars,
+          batched uploads, commit polling</td></tr>
+  <tr><td><span class="file">dashboard/setup_and_import.py</span> ·
+          <span class="file">setup_v2.py</span></td>
+      <td>The parsers, cleaning helpers and state backfill; the Python
+          cluster/guard functions <code>sync.py</code> imports. The
+          destructive-rebuild <code>main()</code>s are retired</td></tr>
+  <tr><td><span class="file">dashboard/registry.py</span> · <span class="file">lead_registry.db</span></td>
+      <td>Lead codes and the natural-key crosswalk — the pipeline's identity
+          store. Keep a copy off this machine</td></tr>
+  <tr><td><span class="file">scripts/etl-from-noco.js</span></td>
+      <td>The one-off SQLite→PostgreSQL migration, with its verification
+          report; <span class="file">noco.db</span> stays as the frozen
+          pre-migration backup</td></tr>
+  <tr><td><span class="file">docker-compose.yml</span> ·
+          <span class="file">docker-compose.prod.yml</span> ·
+          <span class="file">Caddyfile</span> · <span class="file">Dockerfile</span></td>
+      <td>Postgres + the NocoDB admin grid in dev; add the api container, TLS
+          and nightly backups in prod</td></tr>
+  <tr><td><span class="file">.env</span> · <span class="file">.env.server</span></td>
+      <td>Compose passwords vs the API's config — two files because NocoDB
+          auto-reads <code>.env</code> (see <span class="file">CLAUDE.md</span>
+          for the incident that taught us)</td></tr>
 </table>
 
 <footer>

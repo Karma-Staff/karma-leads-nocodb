@@ -1,12 +1,9 @@
-/* Karma Leads — email-style client over the NocoDB API */
+/* Karma Leads — email-style client over the domain API */
 "use strict";
 
 const $ = (id) => document.getElementById(id);
 const S = {
-  token: localStorage.getItem("kl_token") || null,
-  me: null,
-  baseId: null,
-  tables: {},          // key -> {id, title, cols: {title: colId}, linkCols: {title: colId}}
+  me: null,            // {id, email, display_name, role} from /api/me
   tab: "companies",
   q: "",
   status: "",
@@ -16,27 +13,57 @@ const S = {
   page: 1,             // 1-based
   pageSize: 50,
   total: 0,
+  cursors: [null],     // cursors[n] reaches page n+1 — keyset paging, not offset
   sel: null,           // {row, tkey}
-  recents: [],         // [{t, id, at, kind}] newest first — see loadRecents()
-  segment: null,       // {id, label} while browsing one Category × State bucket
+  recents: [],         // rows already joined with their leads — see loadRecents()
+  segment: null,       // {category, state, label} while browsing one segment
 };
 const PAGE_SIZES = [25, 50, 100, 200];
 
+/* Every tab is the same /api/leads query with different parameters — the old
+   three-tables-merged-in-the-browser union (and its 1,000-row correctness cap)
+   is gone; Favorites and Removed are just filters now. */
 const TABS = {
-  companies: { title: "Companies", table: "Companies", pv: "Company", dateField: "Date Added" },
-  people:    { title: "People",    table: "People",    pv: "Name",    dateField: "Date Added" },
-  jobs:      { title: "Job board", table: "Job Board", pv: "Job Title", dateField: "Posted" },
-  // "Recent" is an activity trail, not a date filter: the last 25 leads this
+  companies: { title: "Companies", kind: "company", pv: "Company", dateField: "Date Added" },
+  people:    { title: "People",    kind: "person",  pv: "Name",    dateField: "Date Added" },
+  jobs:      { title: "Job board", kind: "job",     pv: "Job Title", dateField: "Posted" },
+  // "Recent" is an activity trail, not a date filter: the last 50 leads this
   // account actually touched, newest first. Starts empty for a new account.
   recent:    { title: "Recent activity", activity: true },
-  favorites: { title: "Favorites", union: true },
-  removed:   { title: "Removed",   union: true },
-  // not in the sidebar: entered by clicking a segment tag in the reading pane.
-  // Rows come from the Segments↔Companies link, so it reads Companies' columns.
-  segment:   { title: "Segment", table: "Companies", pv: "Company",
+  favorites: { title: "Favorites", favorite: true },
+  removed:   { title: "Removed",   removedTab: true },
+  // admin-only, and not a list of leads at all: the team's action log
+  stats:     { title: "Team activity", stats: true, admin: true },
+  // not in the sidebar: entered by clicking a segment tag in the reading pane
+  segment:   { title: "Segment", kind: "company", pv: "Company",
                dateField: "Date Added", segment: true },
 };
 const UNION_KEYS = ["companies", "people", "jobs"];
+const KIND_TAB = { company: "companies", person: "people", job: "jobs" };
+
+/* The API speaks snake_case; the render layer below still reads the NocoDB-era
+   title-case keys. This adapter is the whole translation, in one place, so the
+   ~100 render call sites didn't have to change in the cutover. */
+function fromApi(r) {
+  const _t = KIND_TAB[r.kind] || "companies";
+  return {
+    _t, Id: r.id, "Lead Code": r.lead_code,
+    Company: r.company, Name: r.kind === "person" ? r.name : r.company,
+    "Job Title": r.kind === "job" ? r.name : null,
+    Title: r.title, Contact: r.contact, "Contact Title": r.contact_title,
+    Email: r.email, Phone: r.phone, "Phone Key": r.phone_key,
+    Website: r.website, "Job URL": r.job_url,
+    Category: r.category, Industry: r.industry,
+    Employees: r.employees, Revenue: r.revenue, Certs: r.certs,
+    City: r.city, State: r.state,
+    Status: r.status, Owner: r.owner,
+    Favorite: r.favorite, Removed: r.removed,
+    Source: r.source, "Source File": r.source_file,
+    "Date Added": r.date_added, Posted: r.date_added,
+    _related: r.related || null,
+    ...(r.touched_at ? { _touchedAt: r.touched_at } : {}),
+  };
+}
 
 const SRC_CHIP = {
   "Job board": "job", "Excel import": "excel", "Apollo export": "apollo",
@@ -44,31 +71,24 @@ const SRC_CHIP = {
 };
 const STATUSES = ["New", "Contacted", "Responded", "Qualified", "Not interested"];
 
-/* Sort options. "@date" and "@name" resolve per table (Date Added vs Posted,
-   Company vs Name vs Job Title); the rest are real column titles, and an
-   option is only offered when the table actually has that column. */
+/* Sort options — the keys go straight to /api/leads?sort=. An option is only
+   offered where the underlying data exists: certifications only ever came in
+   on companies, and job rows carry no revenue. */
 const SORTS = [
-  { key: "recent", label: "Newest first", field: "@date", dir: "desc" },
-  { key: "oldest", label: "Oldest first", field: "@date", dir: "asc" },
-  { key: "name", label: "Name A–Z", field: "@name", dir: "asc" },
-  { key: "name_z", label: "Name Z–A", field: "@name", dir: "desc" },
-  { key: "size", label: "Biggest company", field: "Employees", dir: "desc" },
-  { key: "size_asc", label: "Smallest company", field: "Employees", dir: "asc" },
-  { key: "certs", label: "Most certifications", field: "Certs", dir: "desc" },
-  { key: "revenue", label: "Highest revenue", field: "Revenue", dir: "desc" },
-  { key: "state", label: "State A–Z", field: "State", dir: "asc" },
-  { key: "city", label: "City A–Z", field: "City", dir: "asc" },
-  { key: "status", label: "Status", field: "Status", dir: "asc" },
+  { key: "recent", label: "Newest first" },
+  { key: "oldest", label: "Oldest first" },
+  { key: "name", label: "Name A–Z" },
+  { key: "name_z", label: "Name Z–A" },
+  { key: "size", label: "Biggest company" },
+  { key: "size_asc", label: "Smallest company" },
+  { key: "certs", label: "Most certifications" },
+  { key: "revenue", label: "Highest revenue" },
+  { key: "state", label: "State A–Z" },
+  { key: "city", label: "City A–Z" },
+  { key: "status", label: "Status" },
 ];
-const sortDef = (key) => SORTS.find((s) => s.key === key) || SORTS[0];
-function sortField(key, tkey) {
-  const s = sortDef(key);
-  if (s.field === "@date") return TABS[tkey].dateField;
-  if (s.field === "@name") return TABS[tkey].pv;
-  return s.field;
-}
-const sortUsable = (key, tkey) =>
-  !!S.tables[tkey]?.cols?.[sortField(key, tkey)];
+const SORTLESS = { people: ["certs"], jobs: ["certs", "revenue"] };
+const sortUsable = (key, tkey) => !(SORTLESS[tkey] || []).includes(key);
 
 /* ---------------- api ---------------- */
 async function api(path, opts = {}) {
@@ -76,12 +96,22 @@ async function api(path, opts = {}) {
     ...opts,
     headers: {
       "Content-Type": "application/json",
-      ...(S.token ? { "xc-auth": S.token } : {}),
       ...(opts.headers || {}),
     },
   });
-  if (res.status === 401) { logout(); throw new Error("unauthorized"); }
-  if (!res.ok) throw new Error(`${path} -> ${res.status}: ${await res.text()}`);
+  if (res.status === 401) {
+    // during boot a 401 just means "show the login screen" — only a session
+    // dying mid-use triggers the full sign-out (else a cookie-less first
+    // visit would reload forever)
+    if (S.booted) logout();
+    throw new Error("Not signed in");
+  }
+  if (!res.ok) {
+    const text = await res.text();
+    let msg;                          // the API sends {error: "readable message"}
+    try { msg = JSON.parse(text).error; } catch { /* not JSON */ }
+    throw new Error(msg || `${path} -> ${res.status}: ${text}`);
+  }
   const text = await res.text();
   return text ? JSON.parse(text) : null;
 }
@@ -126,81 +156,19 @@ function sourceChip(src) {
 }
 
 /* ---------------- auth ---------------- */
-async function login(email, password) {
-  // Sign in with the real NocoDB account. There is no admin/admin shorthand
-  // any more — it mapped to an account with no access to the base, so it
-  // signed in fine and then showed an empty app.
-  const r = await fetch("/api/v1/auth/user/signin", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email: email.trim(), password }),
-  });
-  if (!r.ok) {
-    const msg = (await r.json().catch(() => ({}))).msg || "Sign-in failed";
-    throw new Error(email.includes("@") ? msg : `${msg} — sign in with your full email address`);
-  }
-  S.token = (await r.json()).token;
-  localStorage.setItem("kl_token", S.token);
-}
 function logout() {
-  localStorage.removeItem("kl_token");
-  S.token = null;
-  location.reload();
+  // clear the sealed session server-side and end it at WorkOS too
+  fetch("/api/auth/logout", { method: "POST" })
+    .then((r) => r.json())
+    .then((o) => { location.href = o.url || "/app/"; })
+    .catch(() => location.reload());
 }
 
 /* ---------------- meta discovery ---------------- */
 async function discover() {
-  S.me = await api("/api/v1/auth/user/me");
-  const bases = (await api("/api/v2/meta/bases")).list || [];
-  const base = bases.find((b) => b.title === "Karma Leads");
-  // signing in is not the same as having access — say so instead of showing nothing
-  if (!base) throw new Error(
-    `${S.me.email} has no access to the Karma Leads base. Ask an admin to invite this account as an Editor.`);
-  S.baseId = base.id;
-  const tables = (await api(`/api/v2/meta/bases/${base.id}/tables`)).list || [];
-  for (const [key, cfg] of Object.entries(TABS)) {
-    if (!cfg.table) continue;
-    const t = tables.find((x) => x.title === cfg.table);
-    if (!t) throw new Error(`Table ${cfg.table} missing`);
-    const meta = await api(`/api/v2/meta/tables/${t.id}`);
-    const cols = {}, linkCols = {};
-    for (const c of meta.columns) {
-      cols[c.title] = c.id;
-      if (c.uidt === "Links" || c.uidt === "LinkToAnotherRecord") linkCols[c.title] = c.id;
-    }
-    S.tables[key] = { id: t.id, title: t.title, cols, linkCols };
-  }
-  const bl = tables.find((x) => x.title === "Blocklist");
-  if (bl) S.tables.blocklist = { id: bl.id };
-  const seg = tables.find((x) => x.title === "Segments");
-  if (seg) {
-    const meta = await api(`/api/v2/meta/tables/${seg.id}`);
-    const linkCols = {};
-    for (const c of meta.columns)
-      if (c.uidt === "Links" || c.uidt === "LinkToAnotherRecord") linkCols[c.title] = c.id;
-    S.tables.segments = { id: seg.id, title: "Segments", linkCols };
-  }
-}
-
-/* ---------------- counts + stats ---------------- */
-async function count(tkey, where) {
-  const t = S.tables[tkey];
-  const qs = where ? `?where=${encodeURIComponent(where)}` : "";
-  return (await api(`/api/v2/tables/${t.id}/records/count${qs}`)).count;
-}
-const LIVE = "(Removed,notchecked)";
-const sum = (a) => a.reduce((x, y) => x + y, 0);
-/* count across all three tables, excluding removed leads unless asked */
-async function countAll(where) {
-  const w = where ? `${where}~and${LIVE}` : LIVE;
-  return sum(await Promise.all(UNION_KEYS.map((k) => count(k, w))));
-}
-
-/* count over only the tables that actually have the column — Job Board has an
-   Email but no Phone, and asking for a missing column is a 400 */
-async function countAllWith(col, where) {
-  const keys = UNION_KEYS.filter((k) => S.tables[k]?.cols?.[col]);
-  if (!keys.length) return 0;
-  return sum(await Promise.all(keys.map((k) => count(k, `${where}~and${LIVE}`))));
+  // one call answers both "who am I" and "am I invited" — the API's 403 body
+  // ("x is not invited...") surfaces on the login screen via api()'s message
+  S.me = await api("/api/me");
 }
 
 /* 35,271 -> "35.3k"; small numbers stay exact. The tile carries the precise
@@ -242,53 +210,37 @@ async function refreshCounts() {
 }
 
 async function runCounts() {
-  const [nc, np, nj] = await Promise.all(UNION_KEYS.map((k) => count(k, LIVE)));
-  const total = nc + np + nj;
-  $("count-companies").textContent = nc.toLocaleString();
-  $("count-people").textContent = np.toLocaleString();
-  $("count-jobs").textContent = nj.toLocaleString();
-
-  // everything below is independent — one round trip, not six in series
-  // ("Recent" is the activity trail, not a date window: its badge comes from
-  // S.recents via cacheRecents, so there is nothing to count for it here)
-  const dateW = (tkey, days) =>
-    `(${TABS[tkey].dateField},isWithin,pastNumberOfDays,${days})~and${LIVE}`;
-  const spread = (w) => Promise.all(UNION_KEYS.map((k) => count(k, w(k)))).then(sum);
-  const [wk, wk2, favorites, removed, newTotal, qualified, phone, email] =
-    await Promise.all([
-      spread((k) => dateW(k, 7)),
-      spread((k) => dateW(k, 14)),
-      countAll("(Favorite,checked)"),
-      spread(() => "(Removed,checked)"),
-      countAll("(Status,eq,New)"),
-      countAll("(Status,eq,Qualified)"),
-      countAllWith("Phone", "(Phone,notblank)"),
-      countAllWith("Email", "(Email,notblank)"),
-    ]);
-
-  $("count-favorites").textContent = favorites.toLocaleString();
-  $("count-removed").textContent = removed.toLocaleString();
+  // one aggregate endpoint, one SQL pass, cached 30s server-side — this used
+  // to be ~26 separate count queries per refresh
+  const c = await api("/api/counts");
+  const total = c.total;
+  $("count-companies").textContent = c.companies.toLocaleString();
+  $("count-people").textContent = c.people.toLocaleString();
+  $("count-jobs").textContent = c.jobs.toLocaleString();
+  $("count-favorites").textContent = c.favorites.toLocaleString();
+  $("count-removed").textContent = c.removed.toLocaleString();
+  // ("Recent" is the activity trail — its badge comes from S.recents)
 
   // total: what the base is made of, as one composition bar
   const seg = (n, hue, label) => n
     ? `<span style="width:${pct(n, total).toFixed(2)}%; background:var(--${hue})"
         title="${n.toLocaleString()} ${label}"></span>` : "";
   setStat("total", total,
-    `<div class="compo">${seg(nc, "cat-1", "companies")}${seg(np, "cat-2", "people")}${seg(nj, "cat-3", "jobs")}</div>`,
-    `<i class="dot" style="background:var(--cat-1)"></i>${compact(nc)}
-     <i class="dot" style="background:var(--cat-2)"></i>${compact(np)}
-     <i class="dot" style="background:var(--cat-3)"></i>${compact(nj)}`);
+    `<div class="compo">${seg(c.companies, "cat-1", "companies")}${seg(c.people, "cat-2", "people")}${seg(c.jobs, "cat-3", "jobs")}</div>`,
+    `<i class="dot" style="background:var(--cat-1)"></i>${compact(c.companies)}
+     <i class="dot" style="background:var(--cat-2)"></i>${compact(c.people)}
+     <i class="dot" style="background:var(--cat-3)"></i>${compact(c.jobs)}`);
 
-  meterStat("phone", phone, total, "leads");
-  meterStat("email", email, total, "leads");
-  meterStat("contacted", total - newTotal, total, "leads worked");
-  meterStat("qualified", qualified, total, "leads");
+  meterStat("phone", c.with_phone, total, "leads");
+  meterStat("email", c.with_email, total, "leads");
+  meterStat("contacted", total - c.status_new, total, "leads worked");
+  meterStat("qualified", c.qualified, total, "leads");
 
   // new-this-week carries a delta against the 7 days before it, not a meter:
   // a week's intake as a share of 35k would be a permanently empty bar
   // a percentage off a near-zero prior week is noise ("↑8000%" for 1 -> 81),
   // so only show one when the baseline is big enough to mean anything
-  const prev = Math.max(0, wk2 - wk);
+  const wk = c.week, prev = c.prev_week;
   const change = prev >= 10 ? Math.round(((wk - prev) / prev) * 100) : null;
   setStat("week", wk, "",
     change !== null
@@ -300,76 +252,46 @@ async function runCounts() {
 }
 
 /* ---------------- recents (the leads this account touched) ----------------
-   The trail is kept per account by the server (/app-api/recents) so it follows
-   the person between browsers. localStorage is only a paint-first cache — and
-   the fallback if the endpoint is down. */
-const RECENT_CACHE = "kl_recents";
-const RECENT_MAX = 25;                   // keep in step with MAX in recents.js
+   The trail is kept per account by the server so it follows the person between
+   browsers. Mutations (status, owner, favorite, remove, notes) land on it
+   server-side inside their own endpoints now; the one event the client still
+   reports is "open", because opening a lead is a read the server can't see.
+   The GET returns full rows already joined with their leads, removed ones
+   filtered out — no second lookup. */
+const RECENT_MAX = 50;                   // keep in step with MAX in server/recents.js
 
-function cacheRecents() {
-  try { localStorage.setItem(RECENT_CACHE, JSON.stringify(S.recents)); } catch { /* full/private */ }
+function recentsBadge() {
   const el = $("count-recent");
   if (el) el.textContent = S.recents.length.toLocaleString();
 }
 
 async function loadRecents() {
   try {
-    const cached = JSON.parse(localStorage.getItem(RECENT_CACHE) || "[]");
-    if (Array.isArray(cached)) S.recents = cached;
-  } catch { /* ignore a mangled cache */ }
-  try {
-    S.recents = (await api("/app-api/recents")).list || [];
-    cacheRecents();
+    S.recents = ((await api("/api/recents")).list || []).map(fromApi);
+    recentsBadge();
   } catch (e) {
-    console.warn("[karma] recents unavailable, using the local cache", e);
-    cacheRecents();
+    console.warn("[karma] recents unavailable", e);
   }
 }
 
-/* Record an interaction. Fire-and-forget on purpose — nothing the user does
-   should ever wait on the trail being written. */
-function touchLead(item, kind) {
+/* Record an open. Fire-and-forget on purpose — nothing the user does should
+   ever wait on the trail being written. */
+function touchLead(item) {
   if (!item || !UNION_KEYS.includes(item._t) || !item.Id) return;
   S.recents = [
-    { t: item._t, id: item.Id, at: new Date().toISOString(), kind: kind || "open" },
-    ...S.recents.filter((x) => !(x.t === item._t && x.id === item.Id)),
+    { ...item, _touchedAt: new Date().toISOString() },
+    ...S.recents.filter((x) => x.Id !== item.Id),
   ].slice(0, RECENT_MAX);
-  cacheRecents();
-  api("/app-api/recents", {
+  recentsBadge();
+  // the list is deliberately not re-rendered on the response: reshuffling rows
+  // under the pointer while someone is reading a lead is worse than being stale
+  api("/api/recents", {
     method: "POST",
-    body: JSON.stringify({ t: item._t, id: item.Id, kind: kind || "open" }),
-  }).then((r) => {
-    // the list is deliberately not re-rendered here: reshuffling rows under
-    // the pointer while someone is reading a lead is worse than being stale
-    if (r && r.list) { S.recents = r.list; cacheRecents(); }
+    body: JSON.stringify({ lead_id: item.Id }),
   }).catch((e) => console.warn("[karma] could not save recent", e));
 }
 
-/* Look the recorded rows back up, one request per table (25 ids at most, so an
-   ~or chain is short), then return them in interaction order. */
-async function fetchRecentRows() {
-  const byTable = {};
-  for (const e of S.recents) (byTable[e.t] ||= []).push(e.id);
-  const found = new Map();                       // "tkey:id" -> row
-  await Promise.all(Object.entries(byTable).map(async ([tkey, ids]) => {
-    const t = S.tables[tkey];
-    if (!t) return;
-    const where = ids.map((id) => `(Id,eq,${id})`).join("~or");
-    const r = await api(`/api/v2/tables/${t.id}/records` +
-      `?limit=${RECENT_MAX}&where=${encodeURIComponent(where)}`);
-    for (const row of r.list || []) found.set(`${tkey}:${row.Id}`, { ...row, _t: tkey });
-  }));
-  const rows = [];
-  for (const e of S.recents) {
-    const row = found.get(`${e.t}:${e.id}`);
-    // gone from the base, or banned since it was touched — don't resurface it
-    if (!row || row.Removed) continue;
-    rows.push({ ...row, _touchedAt: e.at });
-  }
-  return rows;
-}
-
-/* The trail is 25 rows and already in the right order, so its search, status
+/* The trail is 50 rows and already in the right order, so its search, status
    and state filters run here instead of as a where clause. */
 function matchesFilters(r) {
   if (S.status && (r.Status || "New") !== S.status) return false;
@@ -386,77 +308,39 @@ function matchesFilters(r) {
   return true;
 }
 
-/* ---------------- list ---------------- */
-function buildWhere(tkey) {
-  const parts = [];
-  if (S.q) {
-    const q = S.q.replace(/[(),]/g, " ").trim();
-    const fields = tkey === "companies" ? ["Company", "Email", "City"]
-      : tkey === "people" ? ["Name", "Company", "Email"]
-      : ["Job Title", "Company", "Contact"];
-    parts.push("(" + fields.map((f) => `(${f},like,%${q}%)`).join("~or") + ")");
+/* ---------------- list ----------------
+   One endpoint serves every tab: /api/leads with different parameters. The
+   sidebar tabs are kind filters, Favorites/Removed are boolean filters (no
+   more browser-side union or its 1,000-row cap), and a segment is just
+   category + state. Paging is keyset: cursors[n] reaches page n+1, so page
+   400 costs what page 1 costs and rows can't shift underneath the pager. */
+function listParams() {
+  const cfg = TABS[S.tab];
+  const p = new URLSearchParams();
+  if (cfg.segment && S.segment) {
+    p.set("kind", "company");
+    p.set("category", S.segment.category);
+    p.set("state", S.segment.state);
+  } else {
+    if (cfg.kind) p.set("kind", cfg.kind);
+    if (cfg.favorite) p.set("favorite", "true");
+    if (cfg.removedTab) p.set("removed", "true");
+    if (S.state) p.set("state", S.state);
   }
-  if (S.status) parts.push(`(Status,eq,${S.status})`);
-  if (S.state) {
-    // the sources disagree — "FL" in one file, "Florida" in the next — so match
-    // both spellings. `like` (no wildcard) is exact but case-insensitive.
-    const full = STATE_NAME[S.state];
-    parts.push(`((State,like,${S.state})${full ? `~or(State,like,${full})` : ""})`);
-  }
-  if (S.tab === "favorites") parts.push(`(Favorite,checked)`);
-  // banned numbers stay out of every view except Removed itself
-  parts.push(S.tab === "removed" ? "(Removed,checked)" : "(Removed,notchecked)");
-  return parts.join("~and");
+  if (S.q) p.set("q", S.q);
+  if (S.status) p.set("status", S.status);
+  p.set("sort", sortUsable(S.sort, S.tab) ? S.sort : "recent");
+  p.set("limit", S.pageSize);
+  const cur = S.cursors[S.page - 1];
+  if (cur) p.set("cursor", cur);
+  return p;
 }
 
-async function fetchPage(tkey, limit, offset) {
-  const t = S.tables[tkey];
-  const key = sortUsable(S.sort, tkey) ? S.sort : "recent";
-  const s = sortDef(key);
-  const params = new URLSearchParams({
-    limit, offset,
-    sort: (s.dir === "desc" ? "-" : "") + sortField(key, tkey),
-  });
-  const w = buildWhere(tkey);
-  if (w) params.set("where", w);
-  const r = await api(`/api/v2/tables/${t.id}/records?${params}`);
-  return { rows: (r.list || []).map((x) => ({ ...x, _t: tkey })), page: r.pageInfo || {} };
-}
-
-/* One segment's companies, straight off the Segments↔Companies link. The link
-   endpoint honours `where`, `fields`, `limit` and `offset` — so search, state
-   and status filters keep working here — but it silently ignores `sort`, which
-   is why the sort control is disabled in this view rather than lying. */
-/* unlike /records, the link endpoint projects down to Id + the primary value
-   unless asked otherwise, which would strip every row of its city, certs and
-   date. Ask for what renderList() draws, intersected with the columns this
-   base actually has so a schema change can't 400 the whole view. */
-const SEGMENT_FIELDS = ["Id", "Company", "Category", "City", "State", "Employees",
-  "Revenue", "Certs", "Industry", "Email", "Phone", "Status", "Favorite",
-  "Removed", "Source", "Date Added"];
-
-async function fetchSegmentPage(limit, offset) {
-  const segT = S.tables.segments;
-  const lc = segT?.linkCols?.["Companies"];
-  if (!lc) return { rows: [], page: {} };
-  const params = new URLSearchParams({ limit, offset });
-  const cols = S.tables.companies?.cols || {};
-  const fields = SEGMENT_FIELDS.filter((f) => f === "Id" || cols[f]);
-  params.set("fields", fields.join(","));
-  const w = buildWhere("companies");
-  if (w) params.set("where", w);
-  const r = await api(
-    `/api/v2/tables/${segT.id}/links/${lc}/records/${S.segment.id}?${params}`);
-  return {
-    rows: (r.list || []).map((x) => ({ ...x, _t: "companies" })),
-    page: r.pageInfo || {},
-  };
-}
-
-function openSegment(id, label) {
-  S.segment = { id, label };
+function openSegment(category, state, label) {
+  S.segment = { category, state, label };
   S.tab = "segment";
   S.page = 1;
+  S.cursors = [null];
   document.querySelectorAll(".nav-item").forEach((b) => b.classList.remove("active"));
   $("segment-back")?.classList.remove("hidden");
   $("seg-eyebrow")?.classList.remove("hidden");
@@ -472,70 +356,37 @@ function exitSegment() {
   setTab("companies");
 }
 
-/* union tabs have no server-side merge: pull enough of each table to cover the
-   requested page, merge-sort, then cut the window out of the middle */
-const UNION_MAX = 1000;                     // NocoDB's per-request ceiling
-
-/* re-apply the chosen sort across the three tables once they're merged.
-   Rows with nothing in the sort column always sink to the bottom. */
-function unionComparator(key) {
-  const s = sortDef(key);
-  const dir = s.dir === "desc" ? -1 : 1;
-  const val = (r) => r[sortField(key, r._t)];
-  return (a, b) => {
-    const va = val(a), vb = val(b);
-    const ea = va === null || va === undefined || va === "";
-    const eb = vb === null || vb === undefined || vb === "";
-    if (ea || eb) return ea && eb ? 0 : ea ? 1 : -1;
-    if (typeof va === "number" && typeof vb === "number") return (va - vb) * dir;
-    return String(va).localeCompare(String(vb)) * dir;
-  };
-}
-
 async function loadList(resetPage = false) {
-  if (resetPage) S.page = 1;
+  if (resetPage) { S.page = 1; S.cursors = [null]; }
   const cfg = TABS[S.tab];
+  // Team activity reads the log, not the leads table — no list, no pager
+  if (cfg.stats) return loadStats();
   $("list-title").textContent = cfg.segment
     ? (S.segment?.label || "Segment") : cfg.title;
-  const start = (S.page - 1) * S.pageSize;
 
-  if (cfg.segment) {
-    if (!S.segment) return exitSegment();
-    const { rows, page } = await fetchSegmentPage(S.pageSize, start);
-    S.list = rows;
-    S.total = page.totalRows ?? rows.length;
-    const eb = $("seg-eyebrow");
-    if (eb) eb.textContent =
-      `Segment · ${S.total.toLocaleString()} compan${S.total === 1 ? "y" : "ies"}`;
-  } else if (cfg.activity) {
-    // 25 rows at most: pull them all, filter and page locally
-    const live = await fetchRecentRows();
-    // the badge normally counts the trail; now that we know how many of those
-    // rows still exist, correct it (a lead removed after you touched it is
-    // remembered but not shown)
-    const badge = $("count-recent");
-    if (badge) badge.textContent = live.length.toLocaleString();
-    const rows = live.filter(matchesFilters);
+  if (cfg.activity) {
+    // 50 rows at most: refetch the trail, filter and page locally
+    await loadRecents();
+    const rows = S.recents.filter(matchesFilters);
     S.total = rows.length;
-    S.list = rows.slice(start, start + S.pageSize);
-  } else if (cfg.union) {
-    const need = Math.min(start + S.pageSize, UNION_MAX);
-    const [results, counts] = await Promise.all([
-      Promise.all(UNION_KEYS.map((k) => fetchPage(k, need, 0))),
-      Promise.all(UNION_KEYS.map((k) => count(k, buildWhere(k)))),
-    ]);
-    const rows = results.flatMap((r) => r.rows);
-    rows.sort(unionComparator(S.sort));
-    S.total = Math.min(sum(counts), UNION_MAX);
+    const start = (S.page - 1) * S.pageSize;
     S.list = rows.slice(start, start + S.pageSize);
   } else {
-    const { rows, page } = await fetchPage(S.tab, S.pageSize, start);
-    S.list = rows;
-    S.total = page.totalRows ?? rows.length;
+    if (cfg.segment && !S.segment) return exitSegment();
+    const r = await api(`/api/leads?${listParams()}`);
+    S.list = (r.list || []).map(fromApi);
+    if (r.total != null) S.total = r.total;      // only sent on the first page
+    S.cursors[S.page] = r.nextCursor;
+    if (cfg.segment) {
+      const eb = $("seg-eyebrow");
+      if (eb) eb.textContent =
+        `Segment · ${S.total.toLocaleString()} compan${S.total === 1 ? "y" : "ies"}`;
+    }
   }
   // the page can fall off the end when rows leave the view (unfavorited, removed)
-  if (!S.list.length && S.page > pageCount()) {
-    S.page = pageCount();
+  if (!S.list.length && S.page > 1) {
+    S.page = 1;
+    S.cursors = [null];
     return loadList();
   }
   renderList();
@@ -547,7 +398,13 @@ function pageCount() {
 }
 
 function goToPage(n) {
-  const p = Math.min(Math.max(1, n), pageCount());
+  let p = Math.min(Math.max(1, n), pageCount());
+  // keyset paging can only reach pages whose cursor it has seen: any earlier
+  // page (cursors are kept), or exactly one page forward. The activity tab
+  // pages a 50-row local array and can jump anywhere.
+  if (!TABS[S.tab].activity && p > S.page) {
+    p = S.cursors[S.page] ? S.page + 1 : S.page;
+  }
   if (p === S.page) return;
   S.page = p;
   $("lead-list").scrollTop = 0;
@@ -568,7 +425,13 @@ function renderPager() {
     : "no leads";
   $("pager-page").textContent = `Page ${S.page} of ${pages.toLocaleString()}`;
   $("pager-first").disabled = $("pager-prev").disabled = S.page <= 1;
-  $("pager-next").disabled = $("pager-last").disabled = S.page >= pages;
+  const activity = TABS[S.tab].activity;
+  $("pager-next").disabled = activity
+    ? S.page >= pages
+    : !S.cursors[S.page];               // keyset: next exists only via its cursor
+  // "last" needs an arbitrary jump, which keyset paging deliberately gave up
+  $("pager-last").disabled = activity ? S.page >= pages : true;
+  $("pager-last").title = activity ? "Last page" : "Not available with fast paging";
   $("page-size").value = String(S.pageSize);
 }
 
@@ -712,14 +575,14 @@ async function select(item) {
   d.classList.remove("hidden");
   d.innerHTML = `<p style="color:var(--ink-3)">Loading…</p>`;
   try {
-    const t = S.tables[item._t];
-    const row = await api(`/api/v2/tables/${t.id}/records/${item.Id}`);
-    row._t = item._t;
-    S.sel = { row, tkey: item._t };
+    // one call returns the lead AND its related rows (company, colleagues,
+    // jobs, similar-count) — this used to be four separate link fetches
+    const row = fromApi(await api(`/api/leads/${item.Id}`));
+    S.sel = { row, tkey: row._t };
     renderDetail(row);
-    touchLead(row, "open");     // only once the lead really loaded
+    touchLead(row);             // only once the lead really loaded
     loadComments(row);
-    loadRelated(row);
+    renderRelated(row);
   } catch (e) {
     d.innerHTML = `<p style="color:var(--ink-3)">Could not load lead (${esc(e.message)})</p>`;
   }
@@ -840,11 +703,11 @@ function renderDetail(r) {
     <div class="detail-section" id="related-section"></div>`;
 
   $("d-status").addEventListener("change", async (e) => {
-    await patchRow(tkey, r.Id, { Status: e.target.value });
+    // the server logs the change (with old -> new) and touches the trail
+    await patchLead(r.Id, { status: e.target.value });
     r.Status = e.target.value;
     const li = S.list.find((x) => x.Id === r.Id && x._t === tkey);
     if (li) li.Status = r.Status;
-    touchLead(r, "status");
     renderList();
     refreshCounts();
   });
@@ -858,9 +721,8 @@ function renderDetail(r) {
   $("d-remove").addEventListener("click", () =>
     r.Removed ? doRestore(r) : openRemoveModal(r));
   $("d-owner").addEventListener("change", async (e) => {
-    await patchRow(tkey, r.Id, { Owner: e.target.value || null });
+    await patchLead(r.Id, { owner: e.target.value || null });
     r.Owner = e.target.value;
-    touchLead(r, "owner");
   });
   $("note-send").addEventListener("click", () => sendNote(r));
   $("note-input").addEventListener("keydown", (e) => {
@@ -911,8 +773,7 @@ async function toggleFavorite(item) {
   if (star && S.sel && S.sel.row.Id === item.Id && S.sel.tkey === item._t)
     star.classList.toggle("on", next);
   try {
-    await patchRow(item._t, item.Id, { Favorite: next });
-    touchLead(item, next ? "favorite" : "unfavorite");
+    await patchLead(item.Id, { favorite: next });   // server logs + touches trail
     if (S.tab === "favorites") loadList();
     refreshCounts();
   } catch (e) {
@@ -921,63 +782,23 @@ async function toggleFavorite(item) {
   }
 }
 
-/* ban a number: removes this lead and every lead sharing its phone */
+/* ban a number: the server blocklists it and sweeps every lead sharing it,
+   in one transaction, and logs who did it and how many leads it took down */
 async function removeLead(r, reason) {
-  const key = r["Phone Key"];
-  let affected = 0;
-  if (key) {
-    const bl = S.tables.blocklist;
-    if (bl) {
-      await api(`/api/v2/tables/${bl.id}/records`, {
-        method: "POST",
-        body: JSON.stringify([{
-          "Phone": r.Phone || "", "Phone Key": key,
-          "Company": r.Company || displayName(r, r._t),
-          "Reason": reason || "", "Added By": S.me?.email || "",
-          "Date Added": new Date().toISOString().slice(0, 10),
-        }]),
-      });
-    }
-    for (const k of UNION_KEYS) {                // sweep all three tables
-      const t = S.tables[k];
-      const res = await api(
-        `/api/v2/tables/${t.id}/records?limit=500&where=` +
-        encodeURIComponent(`(Phone Key,eq,${key})~and(Removed,notchecked)`));
-      const rows = res.list || [];
-      for (let i = 0; i < rows.length; i += 100) {
-        await api(`/api/v2/tables/${t.id}/records`, {
-          method: "PATCH",
-          body: JSON.stringify(rows.slice(i, i + 100)
-            .map((x) => ({ Id: x.Id, Removed: true }))),
-        });
-      }
-      affected += rows.length;
-    }
-  }
-  if (!affected) {                               // no phone on file: just this one
-    await patchRow(r._t, r.Id, { Removed: true });
-    affected = 1;
-  }
-  return affected;
+  const out = await api(`/api/leads/${r.Id}/remove`, {
+    method: "POST", body: JSON.stringify({ reason: reason || "" }),
+  });
+  return out.affected;
 }
 
 async function restoreLead(r) {
-  const key = r["Phone Key"];
-  await patchRow(r._t, r.Id, { Removed: false });
-  if (key && S.tables.blocklist) {
-    const bl = S.tables.blocklist;
-    const res = await api(`/api/v2/tables/${bl.id}/records?limit=100&where=` +
-      encodeURIComponent(`(Phone Key,eq,${key})`));
-    for (const b of res.list || [])
-      await api(`/api/v2/tables/${bl.id}/records`,
-        { method: "DELETE", body: JSON.stringify([{ Id: b.Id }]) });
-  }
+  // un-removes the row and lifts the number's ban, server-side, logged
+  await api(`/api/leads/${r.Id}/restore`, { method: "POST" });
 }
 
-async function patchRow(tkey, id, fields) {
-  const t = S.tables[tkey];
-  await api(`/api/v2/tables/${t.id}/records`, {
-    method: "PATCH", body: JSON.stringify([{ Id: id, ...fields }]),
+async function patchLead(id, fields) {
+  await api(`/api/leads/${id}`, {
+    method: "PATCH", body: JSON.stringify(fields),
   });
 }
 
@@ -998,80 +819,69 @@ function relatedRow(name, sub, onclickIdx, avatar = true) {
   </div>`;
 }
 
-async function loadRelated(r) {
+/* Related rows arrive embedded on the detail response (r._related): the
+   company, colleagues, open jobs, and how many similar companies share this
+   one's Category × State. The only extra fetch is the similar-companies
+   preview, because six teaser rows aren't worth shipping on every open. */
+async function renderRelated(r) {
   const el = $("related-section");
   if (!el) return;
-  const tkey = r._t;
+  const rel = r._related || {};
   const actions = [];   // parallel to data-rel indices
   let html = "";
   try {
-    if (tkey === "companies") {
-      const t = S.tables.companies;
-      if (r["People here"] > 0) {
-        const lc = t.linkCols["People here"];
-        const linked = await api(`/api/v2/tables/${t.id}/links/${lc}/records/${r.Id}?limit=6`);
+    if (r._t === "companies") {
+      if (rel.people?.length) {
         html += `<h4>People at ${esc(r.Company)}</h4>`;
-        for (const p of linked.list || []) {
-          html += relatedRow(p.Name || "?", "", actions.length);
-          actions.push(() => select({ Id: p.Id, _t: "people" }));
+        for (const p of rel.people) {
+          html += relatedRow(p.name || "?", p.title || "", actions.length);
+          actions.push(() => select({ Id: p.id, _t: "people" }));
         }
       }
-      if (r["Job postings"] > 0) {
-        const lc = t.linkCols["Job postings"];
-        const linked = await api(`/api/v2/tables/${t.id}/links/${lc}/records/${r.Id}?limit=4`);
+      if (rel.jobs?.length) {
         html += `<h4 style="margin-top:14px">Open jobs</h4>`;
-        for (const j of linked.list || []) {
-          html += relatedRow(j["Job Title"] || "?", "", actions.length, false);
-          actions.push(() => select({ Id: j.Id, _t: "jobs" }));
+        for (const j of rel.jobs) {
+          html += relatedRow(j.name || "?", "", actions.length, false);
+          actions.push(() => select({ Id: j.id, _t: "jobs" }));
         }
       }
-      const segRef = r["Similar companies"];
-      if (segRef && segRef.Id && S.tables.segments) {
-        const segT = S.tables.segments;
-        const lc = segT.linkCols["Companies"];
-        // ask for the location too: with the avatar gone these rows need
-        // something to tell two identically-named restoration firms apart
-        const linked = await api(`/api/v2/tables/${segT.id}/links/${lc}/records/${segRef.Id}` +
-          `?limit=7&fields=${encodeURIComponent("Id,Company,City,State")}`);
-        const others = (linked.list || []).filter((x) => x.Id !== r.Id).slice(0, 6);
-        const total = (linked.pageInfo?.totalRows || others.length + 1) - 1;
+      if (rel.similar?.count > 0) {
+        const { category, state, count } = rel.similar;
+        const label = `${category} · ${fullState(state)}`;
+        const preview = await api(`/api/leads?kind=company&limit=7&` +
+          `category=${encodeURIComponent(category)}&state=${encodeURIComponent(state)}`);
+        const others = (preview.list || []).filter((x) => x.id !== r.Id).slice(0, 6);
         if (others.length) {
-          const label = fullSegmentLabel(segRef.Segment) || "this segment";
           // the segment name is the way into the full list — a preview of six
           // out of a few hundred is a teaser, not an answer
           html += `<h4 style="margin-top:14px">Similar companies
-            <button class="seg-tag" data-seg="${segRef.Id}"
-              data-seg-label="${esc(label)}"
-              title="Browse all ${total.toLocaleString()} companies in ${esc(label)}"
+            <button class="seg-tag" data-seg-cat="${esc(category)}"
+              data-seg-state="${esc(state)}" data-seg-label="${esc(label)}"
+              title="Browse all ${count.toLocaleString()} companies in ${esc(label)}"
               >${esc(label)}</button>
-            <span class="seg-count">${total.toLocaleString()}</span></h4>`;
+            <span class="seg-count">${count.toLocaleString()}</span></h4>`;
           for (const c of others) {
-            html += relatedRow(c.Company || "?", locationLabel(c), actions.length, false);
-            actions.push(() => select({ Id: c.Id, _t: "companies" }));
+            html += relatedRow(c.name || "?",
+              locationLabel({ City: c.city, State: c.state }), actions.length, false);
+            actions.push(() => select({ Id: c.id, _t: "companies" }));
           }
-          html += `<button class="seg-all" data-seg="${segRef.Id}"
-            data-seg-label="${esc(label)}">See all ${total.toLocaleString()} in ${esc(label)} →</button>`;
+          html += `<button class="seg-all" data-seg-cat="${esc(category)}"
+            data-seg-state="${esc(state)}" data-seg-label="${esc(label)}"
+            >See all ${count.toLocaleString()} in ${esc(label)} →</button>`;
         }
       }
     } else {
-      const ref = r["Company record"];
-      if (ref && ref.Id) {
+      if (rel.company) {
         html += `<h4>Company</h4>`;
-        html += relatedRow(ref.Company || "?", "View company record →", actions.length, false);
-        actions.push(() => select({ Id: ref.Id, _t: "companies" }));
-        // colleagues
-        const t = S.tables.companies;
-        const lc = t.linkCols["People here"];
-        if (lc && tkey === "people") {
-          const linked = await api(`/api/v2/tables/${t.id}/links/${lc}/records/${ref.Id}?limit=6`);
-          const others = (linked.list || []).filter((x) => x.Id !== r.Id);
-          if (others.length) {
-            html += `<h4 style="margin-top:14px">Also at ${esc(ref.Company)}</h4>`;
-            for (const p of others) {
-              html += relatedRow(p.Name || "?", "", actions.length);
-              actions.push(() => select({ Id: p.Id, _t: "people" }));
-            }
-          }
+        html += relatedRow(rel.company.name || "?", "View company record →",
+          actions.length, false);
+        actions.push(() => select({ Id: rel.company.id, _t: "companies" }));
+      }
+      if (r._t === "people" && rel.people?.length) {
+        html += `<h4 style="margin-top:14px">Also at ${esc(rel.company?.name || r.Company)}</h4>`;
+        for (const p of rel.people) {
+          html += relatedRow(p.name || "?", p.title || "", actions.length);
+          actions.push(() => select({ Id: p.id, _t: "people" }));
         }
       }
     }
@@ -1079,34 +889,64 @@ async function loadRelated(r) {
   el.innerHTML = html;
   el.querySelectorAll(".related-row").forEach((row) =>
     row.addEventListener("click", () => actions[+row.dataset.rel]()));
-  el.querySelectorAll("[data-seg]").forEach((b) =>
-    b.addEventListener("click", () => openSegment(+b.dataset.seg, b.dataset.segLabel)));
+  el.querySelectorAll("[data-seg-cat]").forEach((b) =>
+    b.addEventListener("click", () =>
+      openSegment(b.dataset.segCat, b.dataset.segState, b.dataset.segLabel)));
 }
 
-/* ---------------- comments ---------------- */
+/* ---------------- notes (first-class now, with edit and delete) ---------- */
 async function loadComments(r) {
   const el = $("comments");
   if (!el) return;
   try {
-    const t = S.tables[r._t];
-    const res = await api(`/api/v2/meta/comments?row_id=${r.Id}&fk_model_id=${t.id}`);
-    const list = res.list || [];
+    const list = (await api(`/api/leads/${r.Id}/comments`)).list || [];
     if (!list.length) {
       el.innerHTML = `<p style="color:var(--ink-3);font-size:13px">No notes yet — be the first.</p>`;
       return;
     }
     el.innerHTML = list.map((c) => {
-      const who = c.created_display_name || c.created_by_email || c.created_by || "someone";
-      const text = c.comment || "";
+      const who = c.author_email || "someone";
+      const mine = c.author_user_id === S.me?.id || S.me?.role === "admin";
       return `
-      <div class="comment">
+      <div class="comment" data-cid="${c.id}">
         <span class="avatar avatar-sm" style="background:${avColor(who)}">${esc(initials(who))}</span>
         <div class="comment-body">
-          <div class="comment-head"><b>${esc(who)}</b> · ${esc(relTime(c.created_at))}</div>
-          <div class="comment-text">${esc(text)}</div>
+          <div class="comment-head"><b>${esc(who)}</b> · ${esc(relTime(c.created_at))}${
+            c.updated_at ? " · edited" : ""}${
+            mine ? ` <button class="note-act" data-edit="${c.id}" title="Edit note">✎</button>
+                    <button class="note-act" data-del="${c.id}" title="Delete note">🗑</button>` : ""}</div>
+          <div class="comment-text">${esc(c.body)}</div>
         </div>
       </div>`;
     }).join("");
+    el.querySelectorAll("[data-edit]").forEach((b) =>
+      b.addEventListener("click", () => {
+        // swap the text for an input in place — Enter saves, Escape cancels
+        const row = el.querySelector(`[data-cid="${b.dataset.edit}"] .comment-text`);
+        if (!row || row.querySelector("input")) return;
+        const old = row.textContent;
+        row.innerHTML = "";
+        const input = document.createElement("input");
+        input.value = old;
+        input.className = "note-edit";
+        row.appendChild(input);
+        input.focus();
+        input.addEventListener("keydown", async (e) => {
+          if (e.key === "Escape") { row.textContent = old; return; }
+          if (e.key !== "Enter") return;
+          const next = input.value.trim();
+          if (!next || next === old) { row.textContent = old; return; }
+          await api(`/api/comments/${b.dataset.edit}`, {
+            method: "PATCH", body: JSON.stringify({ body: next }),
+          });
+          loadComments(r);
+        });
+      }));
+    el.querySelectorAll("[data-del]").forEach((b) =>
+      b.addEventListener("click", async () => {
+        await api(`/api/comments/${b.dataset.del}`, { method: "DELETE" });
+        loadComments(r);
+      }));
   } catch (e) {
     el.innerHTML = `<p style="color:var(--ink-3);font-size:13px">Notes unavailable</p>`;
   }
@@ -1117,12 +957,10 @@ async function sendNote(r) {
   const text = input.value.trim();
   if (!text) return;
   input.value = "";
-  const t = S.tables[r._t];
-  await api("/api/v2/meta/comments", {
-    method: "POST",
-    body: JSON.stringify({ row_id: String(r.Id), fk_model_id: t.id, comment: text }),
+  // the server records the note action in the team log and the trail
+  await api(`/api/leads/${r.Id}/comments`, {
+    method: "POST", body: JSON.stringify({ body: text }),
   });
-  touchLead(r, "note");
   loadComments(r);
 }
 
@@ -1182,11 +1020,12 @@ async function runImport(file) {
         large files can take a minute — don't close this window.</div>
     </div>`;
   try {
-    const res = await fetch("/app-api/import", {
+    // one import job: the server parses off-thread, stages, dedupes with the
+    // franchise guards, commits, and logs the whole thing under this account
+    const res = await fetch("/api/import-jobs", {
       method: "POST",
       headers: {
         "Content-Type": "application/octet-stream",
-        "xc-auth": S.token,
         "x-filename": encodeURIComponent(file.name),
         "x-category": category,
       },
@@ -1214,23 +1053,25 @@ async function runImport(file) {
 }
 
 function renderImportResult(o) {
+  const c = o.counts || {};
+  const ins = c.inserted || {};
+  const total = (ins.company || 0) + (ins.person || 0) + (ins.job || 0);
   const line = (label, n) => n
     ? `<div class="ir-row"><span>${label}</span><strong>${n.toLocaleString()}</strong></div>` : "";
   $("modal-body").innerHTML = `
     <div class="import-done">
-      <div class="dz-art">${o.total ? "✅" : "🤔"}</div>
-      <p><strong>${o.total.toLocaleString()} lead${o.total === 1 ? "" : "s"} added</strong>
+      <div class="dz-art">${total ? "✅" : "🤔"}</div>
+      <p><strong>${total.toLocaleString()} lead${total === 1 ? "" : "s"} added</strong>
          from ${esc(o.file)}</p>
-      <p class="dz-sub">${o.rows.toLocaleString()} rows read · detected as a ${esc(o.detected)}</p>
+      <p class="dz-sub">${(o.rows || 0).toLocaleString()} rows read · detected as a ${esc(o.detected || "lead list")}</p>
     </div>
     <div class="import-report">
-      ${line("Companies", o.inserted.companies)}
-      ${line("People", o.inserted.people)}
-      ${line("Job board", o.inserted.jobs)}
-      ${line("Skipped — already in the base", o.duplicates)}
-      ${line("Added but hidden — blocked number", o.blocked)}
+      ${line("Companies", ins.company)}
+      ${line("People", ins.person)}
+      ${line("Job board", ins.job)}
+      ${line("Skipped — already in the base", c.duplicates)}
+      ${line("Added but hidden — blocked number", c.blocked)}
     </div>
-    ${o.partialDedupe ? `<p class="dz-sub">⚠️ The base was too large to scan in full, so a few of these may duplicate existing leads.</p>` : ""}
     ${o.unmapped?.length ? `<p class="dz-sub">Columns ignored: ${esc(o.unmapped.slice(0, 12).join(", "))}${o.unmapped.length > 12 ? "…" : ""}</p>` : ""}
     <div class="modal-actions">
       <button type="button" class="btn-secondary" id="import-again">Import another</button>
@@ -1238,15 +1079,18 @@ function renderImportResult(o) {
     </div>`;
   $("modal-cancel").addEventListener("click", closeModal);
   $("import-again").addEventListener("click", openImportModal);
-  if (o.total) toast(`Imported ${o.total.toLocaleString()} leads from ${o.file}`);
+  if (total) toast(`Imported ${total.toLocaleString()} leads from ${o.file}`);
 }
 
-/* dropping a file anywhere in the app opens the importer */
+/* dropping a file anywhere in the app opens the importer. Import is admin-only,
+   so for a member this stays inert apart from swallowing the drop — the
+   browser navigating away to a spreadsheet is nobody's idea of a feature */
 function wireGlobalDrop() {
   const hasFile = (e) => Array.from(e.dataTransfer?.types || []).includes("Files");
   window.addEventListener("dragover", (e) => {
     if (!hasFile(e)) return;
     e.preventDefault();
+    if (S.me?.role !== "admin") return;
     if ($("modal-backdrop").classList.contains("hidden")) openImportModal();
     document.body.classList.add("dragging");
   });
@@ -1257,6 +1101,7 @@ function wireGlobalDrop() {
     if (!hasFile(e)) return;
     e.preventDefault();                     // never let the browser open the file
     document.body.classList.remove("dragging");
+    if (S.me?.role !== "admin") return;
     const f = e.dataTransfer.files[0];
     if (f && $("dropzone")) runImport(f);
   });
@@ -1271,7 +1116,7 @@ function closeModal() {
    The 🔎 button runs a search with the saved settings (confirm step first,
    with a hard max-cost figure); the ⚙ gear edits them. Settings live in
    localStorage — they're personal defaults, not shared state. The Apify
-   token never reaches the browser: everything goes through /app-api. */
+   token never reaches the browser: everything goes through the domain API. */
 const JS_LS = "kl_jobsearch";
 const JS_RATES_FALLBACK = { perResultUsd: 0.005, recruiterPerResultUsd: 0.015,
   limitMin: 10, limitMax: 500, limitDefault: 100 };
@@ -1339,7 +1184,7 @@ function jsSettings() {
 const saveJsSettings = (s) => localStorage.setItem(JS_LS, JSON.stringify(s));
 
 async function loadApifyUsage() {
-  try { APIFY_USAGE = await api("/app-api/apify-usage"); }
+  try { APIFY_USAGE = await api("/api/apify-usage"); }
   catch (e) { console.warn("[karma] apify usage unavailable", e.message); }
   const el = $("credits-line");
   if (el) el.textContent = APIFY_USAGE?.remainingUsd != null
@@ -1546,7 +1391,7 @@ async function runJobSearch() {
     </div>`;
   $("modal-backdrop").classList.remove("hidden");
   try {
-    const out = await api("/app-api/job-search", {
+    const out = await api("/api/job-search", {
       method: "POST",
       body: JSON.stringify({
         titleSearch: splitCommas(s.titles),
@@ -1603,8 +1448,6 @@ function renderJobSearchResult(o) {
       ${line("Skipped — already in the base", o.duplicates)}
       <div class="ir-row"><span>Actual cost charged</span><strong>${cost}</strong></div>
     </div>
-    ${o.partialDedupe ? `<p class="dz-sub">⚠️ The Job board was too large to scan
-      in full, so a few of these may duplicate existing rows.</p>` : ""}
     <div class="modal-actions">
       <button type="button" class="btn-secondary" id="js-again">Search again</button>
       <button type="button" class="btn-primary" id="modal-cancel">Done</button>
@@ -1622,9 +1465,8 @@ async function openRemoveModal(r) {
   // count the blast radius before asking — shared/toll-free numbers hit many leads
   let n = 1;
   if (key) {
-    const counts = await Promise.all(UNION_KEYS.map((k) =>
-      count(k, `(Phone Key,eq,${key})~and(Removed,notchecked)`)));
-    n = counts.reduce((a, b) => a + b, 0) || 1;
+    try { n = (await api(`/api/leads/${r.Id}/remove-preview`)).affected || 1; }
+    catch { /* preview is best-effort; the modal still warns generically */ }
   }
   $("modal-title").textContent = "Remove lead";
   $("modal-body").innerHTML = `<form id="remove-form">
@@ -1677,6 +1519,132 @@ async function doRestore(r) {
   loadList(); refreshCounts();
 }
 
+/* ---------------- Team activity (admin) ----------------
+   Reads /api/activity — the append-only log the API writes on every mutation.
+   Two blocks, per the manager's brief: activity over time (daily bars, split
+   per person) and a live feed with click-through to the lead. The log starts
+   at the migration cutover, and the empty state says so plainly rather than
+   showing a convincing-looking flat chart. */
+const ACT_SLOTS = 8;                     // --cat-1..8, validated in both themes
+
+async function loadStats() {
+  const el = $("stats-body");
+  if (!el) return;
+  el.innerHTML = `<p class="act-empty">Loading the log…</p>`;
+  try {
+    renderStats(await api(`/api/activity?days=${$("act-days")?.value || 30}`));
+  } catch (e) {
+    el.innerHTML = `<p class="act-empty">Could not load activity (${esc(e.message)})</p>`;
+  }
+}
+
+/* stable person -> colour slot, by share of the window's activity; past 8
+   people the tail folds into a grey "Other" rather than inventing hues */
+function actSlots(perPerson) {
+  const map = new Map();
+  perPerson.slice(0, ACT_SLOTS).forEach((p, i) => map.set(p.who, i + 1));
+  return map;
+}
+const actColor = (slot) => slot ? `var(--cat-${slot})` : "var(--ink-3)";
+
+function actChart(d, slots) {
+  const days = d.perDay;
+  const w = 720, h = 120, gap = days.length > 45 ? 1 : 2;
+  const max = Math.max(...days.map((x) => x.total), 1);
+  const bw = Math.max(2, (w - gap * (days.length - 1)) / days.length);
+  let bars = "";
+  days.forEach((day, i) => {
+    const x = (i * (bw + gap)).toFixed(1);
+    let y = h;                            // stack up from the baseline
+    const entries = Object.entries(day.by_who)
+      .sort((a, b) => (slots.get(a[0]) || 99) - (slots.get(b[0]) || 99));
+    for (const [who, n] of entries) {
+      const bh = (n / max) * (h - 6);
+      y -= bh;
+      bars += `<rect x="${x}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}"
+        height="${Math.max(bh - 1, 0.5).toFixed(1)}"
+        fill="${actColor(slots.get(who))}"
+        ><title>${esc(day.date)} — ${esc(who)}: ${n} action${n === 1 ? "" : "s"}</title></rect>`;
+    }
+  });
+  return `<div class="act-chart">
+    <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">${bars}</svg>
+    <div class="act-axis"><span>${esc(days[0]?.date || "")}</span>
+      <span>peak ${max.toLocaleString()} / day</span>
+      <span>${esc(days[days.length - 1]?.date || "")}</span></div>
+  </div>`;
+}
+
+function actLegend(perPerson, slots) {
+  if (!perPerson.length) return "";
+  const item = (p) => {
+    const acts = Object.entries(p.by_action)
+      .map(([a, n]) => `${a} ${n}`).join(" · ");
+    return `<span class="fact" title="${esc(acts)}">
+      <i class="dot" style="background:${actColor(slots.get(p.who))}"></i>
+      ${esc(p.who)} <b>${p.total.toLocaleString()}</b></span>`;
+  };
+  return `<div class="act-legend">${perPerson.map(item).join("")}</div>`;
+}
+
+/* one feed line: who did what to which lead, in words */
+function feedLine(f) {
+  const name = f.lead_name ? `<b>${esc(f.lead_name)}</b>` : "a lead";
+  const m = f.meta || {};
+  switch (f.action) {
+    case "open": return `opened ${name}`;
+    case "status": return `set ${name} to <b>${esc(f.to_value)}</b>` +
+      (f.from_value ? ` <span class="feed-what">(was ${esc(f.from_value)})</span>` : "");
+    case "owner": return `assigned ${name} to <b>${esc(f.to_value)}</b>`;
+    case "favorite": return `favorited ${name}`;
+    case "unfavorite": return `unfavorited ${name}`;
+    case "note": return `noted on ${name}<span class="feed-what">: ${esc(f.to_value || "")}</span>`;
+    case "remove": return `removed ${name}` +
+      (m.affected > 1 ? ` <span class="feed-what">and ${m.affected - 1} more sharing its number</span>` : "") +
+      (f.to_value ? ` <span class="feed-what">(${esc(f.to_value)})</span>` : "");
+    case "restore": return `restored ${name}`;
+    case "import": return `imported <b>${esc(f.to_value || "a file")}</b>` +
+      (m.inserted ? ` <span class="feed-what">(${JSON.stringify(m.inserted).replace(/[{}"]/g, "")})</span>` : "");
+    case "jobsearch": return `ran a job search <span class="feed-what">(${m.found ?? "?"} found, ${m.inserted ?? "?"} new)</span>`;
+    default: return esc(f.action);
+  }
+}
+
+function renderStats(d) {
+  const el = $("stats-body");
+  const slots = actSlots(d.perPerson);
+  if (!d.total) {
+    el.innerHTML = `<div class="act-card"><p class="act-empty">
+      Nothing in the log for this window. Activity is recorded from the moment
+      the new system went live — as the team opens leads, sets statuses and
+      writes notes, it shows up here.</p></div>`;
+    return;
+  }
+  el.innerHTML = `
+    <div class="act-card">
+      <h4>Actions per day — ${d.total.toLocaleString()} in the last ${d.days} days</h4>
+      ${actChart(d, slots)}
+      ${actLegend(d.perPerson, slots)}
+    </div>
+    <div class="act-card">
+      <h4>Latest activity</h4>
+      ${d.feed.map((f, i) => `
+        <div class="feed-row${f.lead_id && f.lead_kind ? "" : " no-lead"}" data-fi="${i}">
+          <span class="avatar avatar-sm" style="background:${avColor(f.actor)}">${esc(initials(f.actor))}</span>
+          <div class="feed-main"><b>${esc(f.actor)}</b> ${feedLine(f)}</div>
+          <span class="feed-when">${esc(relTime(f.at))}</span>
+        </div>`).join("")}
+    </div>`;
+  el.querySelectorAll(".feed-row:not(.no-lead)").forEach((row) =>
+    row.addEventListener("click", () => {
+      const f = d.feed[+row.dataset.fi];
+      const tab = KIND_TAB[f.lead_kind];
+      if (!tab) return;
+      setTab(tab);                       // leaves the stats pane, shows the list
+      select({ Id: f.lead_id, _t: tab });
+    }));
+}
+
 let toastTimer;
 function toast(msg) {
   const el = $("toast");
@@ -1688,6 +1656,9 @@ function toast(msg) {
 
 /* ---------------- boot + events ---------------- */
 function setTab(tab) {
+  // an admin tab reached without the role — a stale deep link, say — lands on
+  // Companies instead of an empty pane. The endpoint 403s regardless.
+  if (TABS[tab]?.admin && S.me?.role !== "admin") tab = "companies";
   S.tab = tab;
   S.segment = null;                     // any sidebar tab leaves segment browsing
   $("segment-back")?.classList.add("hidden");
@@ -1696,6 +1667,12 @@ function setTab(tab) {
   document.querySelectorAll(".nav-item").forEach((b) =>
     b.classList.toggle("active", b.dataset.tab === tab));
   $("clear-recents")?.classList.toggle("hidden", !TABS[tab].activity);
+  /* Team activity is not a list of leads: it takes the whole width instead of
+     leaving an empty reading pane beside a chart */
+  const isStats = !!TABS[tab].stats;
+  $("stats-pane")?.classList.toggle("hidden", !isStats);
+  document.querySelector(".list-pane")?.classList.toggle("hidden", isStats);
+  $("detail-pane")?.classList.toggle("hidden", isStats);
   renderSortOptions();
   loadList(true);
 }
@@ -1705,6 +1682,7 @@ function setTab(tab) {
 function renderSortOptions() {
   const sel = $("sort-by");
   if (!sel) return;
+  if (TABS[S.tab].stats) return;         // its own controls live in the stats pane
   if (TABS[S.tab].activity) {
     // the trail has exactly one meaningful order; leave S.sort alone so the
     // last real choice is still there when the user goes back to a lead tab
@@ -1712,15 +1690,11 @@ function renderSortOptions() {
     sel.disabled = true;
     return;
   }
-  if (TABS[S.tab].segment) {
-    // NocoDB ignores `sort` on the links endpoint, so offering the control
-    // here would be a button that does nothing. S.sort is left untouched.
-    sel.innerHTML = `<option value="">Segment order</option>`;
-    sel.disabled = true;
-    return;
-  }
+  // (segments sort like any other list now — the old "Segment order" lockout
+  //  existed because NocoDB's link endpoint silently ignored `sort`)
   sel.disabled = false;
-  const keys = TABS[S.tab].union ? UNION_KEYS : [S.tab];
+  const mixed = !TABS[S.tab].kind;         // favorites/removed span all kinds
+  const keys = mixed ? UNION_KEYS : [S.tab];
   const usable = SORTS.filter((s) => keys.every((k) => sortUsable(s.key, k)));
   if (!usable.some((s) => s.key === S.sort)) S.sort = "recent";
   sel.innerHTML = usable.map((s) =>
@@ -1829,13 +1803,15 @@ function wire() {
   on("clear-recents", "click", async () => {
     // only forgets the trail — the leads themselves are untouched
     S.recents = [];
-    cacheRecents();
+    recentsBadge();
     loadList(true);
-    try { await api("/app-api/recents", { method: "DELETE" }); }
+    try { await api("/api/recents", { method: "DELETE" }); }
     catch (e) { console.warn("[karma] could not clear recents", e); }
     toast("Recent activity cleared");
   });
   on("segment-back", "click", exitSegment);
+  on("act-days", "change", loadStats);
+  on("act-refresh", "click", loadStats);
   on("import-btn", "click", openImportModal);
   on("job-search-btn", "click", openJobSearchConfirm);
   on("job-search-settings", "click", openJobSearchSettings);
@@ -1853,25 +1829,34 @@ async function boot() {
   $("menu-name").textContent = S.me.display_name || S.me.email.split("@")[0];
   $("menu-email").textContent = S.me.email;
   renderStateOptions();
-  loadApifyUsage();          // fire-and-forget: fills the credits line when it lands
+  /* Admin surfaces ship hidden in the markup and are revealed here, once the
+     role is known — a member never sees them flash. This is presentation only:
+     job-search, import, apify-usage, users and activity all check the role
+     server-side and 403. */
+  if (S.me.role === "admin") {
+    document.querySelectorAll(".admin-only").forEach((el) =>
+      el.classList.remove("hidden"));
+    loadApifyUsage();       // admin surface — a member asking would just 403
+  }
   await loadRecents();       // the Recent tab is served from this, so fetch it first
   const saved = localStorage.getItem("kl_sort");
   if (saved && SORTS.some((s) => s.key === saved)) S.sort = saved;
   const dl = S.deepLink || {};
   setTab(TABS[dl.tab] ? dl.tab : "companies");
   // only the three real lead tabs can open a record by id
-  if (dl.open && TABS[dl.tab]?.table) {
+  if (dl.open && TABS[dl.tab]?.kind && !TABS[dl.tab].segment) {
     select({ Id: +dl.open, _t: dl.tab });
   }
   refreshCounts();
+  S.booted = true;             // from here on, a 401 means the session died
 }
 
 async function init() {
   const usp = new URLSearchParams(location.search);
-  if (usp.get("token")) {
-    S.token = usp.get("token");
-    localStorage.setItem("kl_token", S.token);
-    usp.delete("token");
+  // a failed hosted-login bounce lands back here with the reason in the URL
+  const authError = usp.get("authError");
+  if (authError) {
+    usp.delete("authError");
     history.replaceState(null, "",
       location.pathname + (usp.toString() ? "?" + usp.toString() : ""));
   }
@@ -1889,26 +1874,15 @@ async function init() {
   setDensity(localStorage.getItem("kl_density") || "compact");
   setDetailWidth(+localStorage.getItem("kl_detail_w") || 460);
   try { wire(); } catch (e) { console.error("[karma] wiring failed", e); }
-  $("login-form").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const err = $("login-error");
-    err.classList.add("hidden");
-    try {
-      await login($("login-email").value, $("login-password").value);
-      await boot();
-    } catch (ex) {
-      err.textContent = ex.message;
-      err.classList.remove("hidden");
-    }
-  });
-  let stored = null;
-  if (S.token) {
-    try { await boot(); return; } catch (ex) { stored = ex.message; }
-  }
+  $("login-workos")?.addEventListener("click",
+    () => { location.href = "/api/auth/login"; });
+  let stored = authError;
+  // always attempt boot: the WorkOS session lives in a cookie
+  try { await boot(); return; } catch (ex) { stored = stored || ex.message; }
   $("login-screen").classList.remove("hidden");
   $("app").classList.add("hidden");
-  if (stored && !/unauthorized|invalid/i.test(stored)) {   // say why, don't just bounce
-    const err = $("login-error");
+  if (stored && !/unauthorized|invalid|Not signed in/i.test(stored)) {
+    const err = $("login-error");                 // say why, don't just bounce
     err.textContent = stored;
     err.classList.remove("hidden");
   }

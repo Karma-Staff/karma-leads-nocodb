@@ -1,8 +1,8 @@
 {
-  "name": "karma-leads-nocodb",
+  "name": "karma-leads",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "server/index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
@@ -11,8 +11,12 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@workos-inc/node": "^10.9.0",
     "express": "^5.2.1",
-    "nocodb": "^0.301.3",
+    "pg": "^8.23.0",
     "xlsx": "^0.20.3"
+  },
+  "devDependencies": {
+    "sqlite3": "^5.1.7"
   }
 }

@@ -1,0 +1,56 @@
+# Dev stack for the Karma Leads re-architecture.
+#
+#   docker compose up -d          # postgres only, for local development
+#
+# The app itself runs on the host (`node server/index.js`) in dev — only the
+# database is containerized, so node debugging stays ordinary. Production adds
+# the api + nocodb + caddy services in docker-compose.prod.yml.
+#
+# Secrets come from .env (gitignored; .env.example shows the shape). The init
+# script under db/init/ runs ONCE, on first boot of an empty pgdata volume —
+# to re-run it: docker compose down -v (destroys the database).
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_SUPER_PASSWORD:?set in .env}
+      # roles created by db/init/01-roles.sh on first boot:
+      KARMA_API_PASSWORD: ${KARMA_API_PASSWORD:?set in .env}
+      NOCODB_ADMIN_PASSWORD: ${NOCODB_ADMIN_PASSWORD:?set in .env}
+    ports:
+      - "127.0.0.1:5432:5432"     # localhost only — never exposed to the LAN
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d karma"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # NocoDB as an ADMIN-ONLY grid over the app schema. Its metadata lives in its
+  # own database (nocodb_meta); it reaches the app tables as an attached data
+  # source through the nocodb_admin role, which has row access but NO DDL —
+  # the admin grid can edit data, never the schema. It issues no tokens the
+  # dashboard uses and is bound to localhost only.
+  nocodb:
+    image: nocodb/nocodb:latest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NC_DB: "pg://db:5432?u=nocodb_admin&p=${NOCODB_ADMIN_PASSWORD}&d=nocodb_meta"
+      NC_ADMIN_EMAIL: ${NOCODB_UI_ADMIN_EMAIL:-pema@karmastaff.com}
+      NC_ADMIN_PASSWORD: ${NOCODB_UI_ADMIN_PASSWORD:?set in .env}
+      NC_DISABLE_TELE: "true"
+    ports:
+      - "127.0.0.1:8082:8080"     # localhost only; prod puts it behind Caddy
+    volumes:
+      - nocodata:/usr/app/data
+
+volumes:
+  pgdata:
+  nocodata:

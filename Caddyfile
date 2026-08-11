@@ -1,0 +1,19 @@
+# TLS + routing for production (docker-compose.prod.yml).
+#
+#   app.<domain>    -> the team's dashboard and the domain API
+#   admin.<domain>  -> NocoDB, admins only
+#
+# Caddy fetches and renews certificates automatically once DNS points here.
+
+app.{$DOMAIN} {
+	reverse_proxy api:8080
+}
+
+# NocoDB has its own login, but the admin surface shouldn't even be reachable
+# by the world: keep this hostname unpublished, and consider adding your own
+# IP allowlist here once the office/VPN ranges are known, e.g.
+#   @blocked not remote_ip 203.0.113.0/24
+#   respond @blocked 403
+admin.{$DOMAIN} {
+	reverse_proxy nocodb:8080
+}

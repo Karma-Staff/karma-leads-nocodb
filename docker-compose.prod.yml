@@ -1,0 +1,67 @@
+# Production stack — the same shape as dev plus the api container and Caddy
+# for TLS. Run on any Docker-capable host:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# DNS first: point app.<domain> and admin.<domain> at the host and set DOMAIN
+# in .env — Caddy provisions certificates automatically. WorkOS needs the
+# https callback URL configured on its side too.
+#
+# Backups (see how-it-works.html): nightly pg_dump of BOTH databases to the
+# backups volume, and copy the newest dump OFF the host on a schedule — the
+# registry's lead codes live in `karma` now, and they are the one thing that
+# cannot be regenerated.
+services:
+  api:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: "postgres://karma_api:${KARMA_API_PASSWORD}@db:5432/karma"
+      NOCODB_URL: "http://nocodb:8080"      # phase-A adapter only; dies with WorkOS
+      APIFY_TOKEN: ${APIFY_TOKEN:-}
+      NOCODB_ADMIN_URL: "https://admin.${DOMAIN:-localhost}"
+      # WORKOS_API_KEY / WORKOS_CLIENT_ID / WORKOS_REDIRECT_URI / SESSION_SECRET
+    expose: ["8080"]
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on: [api, nocodb]
+    ports: ["80:80", "443:443"]
+    environment:
+      DOMAIN: ${DOMAIN:?set in .env, e.g. karmaleads.example.com}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+  db:
+    ports: []                    # not even localhost in prod — compose-network only
+
+  nocodb:
+    ports: []                    # reached ONLY through Caddy's admin hostname
+
+  backups:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    depends_on: [db]
+    environment:
+      PGPASSWORD: ${POSTGRES_SUPER_PASSWORD}
+    volumes:
+      - backups:/backups
+    # nightly dump of both databases, keep 14 days. Copy these off-host too.
+    entrypoint: ["sh", "-c", "while true; do \
+        ts=$$(date +%Y%m%d-%H%M); \
+        pg_dump -h db -U postgres -d karma -F c -f /backups/karma-$$ts.dump && \
+        pg_dump -h db -U postgres -d nocodb_meta -F c -f /backups/meta-$$ts.dump && \
+        ls -t /backups/karma-*.dump | tail -n +15 | xargs -r rm; \
+        ls -t /backups/meta-*.dump  | tail -n +15 | xargs -r rm; \
+        sleep 86400; done"]
+
+volumes:
+  caddy_data:
+  caddy_config:
+  backups:

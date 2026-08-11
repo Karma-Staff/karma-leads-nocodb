@@ -1,49 +1,30 @@
 """
-Karma Leads dashboard — NocoDB setup + import.
+Karma Leads — the source-file parsers.
 
-Creates the 'Karma Leads' base with a consolidated Leads table, imports every
-lead file in this repo (normalized + deduped), and creates the dashboard views.
-
-Re-runnable: if the base already exists it is deleted and rebuilt from the files.
-
-Usage:  python dashboard/setup_and_import.py
-Requires NocoDB running on http://localhost:8080 and api_token.json beside it.
+collect() reads every lead export (Apollo, Bitrix, vendor lists, master DB,
+job boards), normalizes the rows and backfills blank States. sync.py and
+import_dnc.py import this module for the parsers and the DATA path; nothing
+here talks to a server. (The NocoDB base-builder that used to follow collect()
+was retired 2026-08-11 with the legacy server.)
 
 The raw lead exports are not in this repo — see DATA below.
 """
-import json
 import math
 import os
 import re
-import sys
-from datetime import datetime, date
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
-import requests
 
-BASE_URL = "http://localhost:8080"
-
-# APP is the repo, which is also the folder the server runs from — api_token.json
-# and dashboard/ live here. DATA is deliberately somewhere else: the raw exports
-# are real names, phones and emails, so they stay out of git and keep their
+# APP is the repo. DATA is deliberately somewhere else: the raw exports are
+# real names, phones and emails, so they stay out of git and keep their
 # OneDrive backup. Set KARMA_LEADS_DATA if they move, or on another machine.
 APP = Path(__file__).resolve().parents[1]
 DATA = Path(os.environ.get(
     "KARMA_LEADS_DATA",
     r"C:\Users\David\OneDrive\Documents\GitHub\KarmaLeads",
 ))
-TOKEN_FILE = APP / "api_token.json"
-
-token = json.loads(TOKEN_FILE.read_text(encoding="utf-8-sig"))["token"]
-H = {"xc-token": token}
-
-
-def api(method, path, **kw):
-    r = requests.request(method, BASE_URL + path, headers=H, **kw)
-    if not r.ok:
-        raise RuntimeError(f"{method} {path} -> {r.status_code}: {r.text[:500]}")
-    return r.json() if r.text else None
 
 
 # ---------------------------------------------------------------- helpers
@@ -477,126 +458,3 @@ def collect():
     print(f"  state backfill: {filled}/{blank} blank States resolved")
     return rows
 
-
-def dedupe(rows):
-    seen = {}
-    order = []
-    for r in rows:
-        if not r["Lead"] and not r["Company"]:
-            continue
-        email = (r["Email"] or "").lower() or None
-        ph = phone_digits(r["Phone"])
-        if email:
-            key = ("e", email)
-        elif ph:
-            key = ("p", ph)
-        else:
-            key = ("c", (r["Company"] or r["Lead"]).lower(),
-                   (r["City"] or "").lower())
-        if key in seen:
-            kept = seen[key]
-            for f, v in r.items():
-                if v and not kept.get(f):
-                    kept[f] = v
-        else:
-            seen[key] = r
-            order.append(r)
-    return order
-
-
-# ---------------------------------------------------------------- nocodb
-SOURCES = "'Excel import','Apollo export','Bitrix CRM','Master DB','Job board'"
-CATEGORIES = ("'Restoration','Independent Adjuster','Public Adjuster',"
-              "'Insurance','Vendor','Job posting','Other'")
-STATUSES = "'New','Contacted','Responded','Qualified','Not interested'"
-
-COLUMNS = [
-    {"column_name": "lead", "title": "Lead", "uidt": "SingleLineText", "pv": True},
-    {"column_name": "company", "title": "Company", "uidt": "SingleLineText"},
-    {"column_name": "job_role", "title": "Title", "uidt": "SingleLineText"},
-    {"column_name": "email", "title": "Email", "uidt": "Email"},
-    {"column_name": "phone", "title": "Phone", "uidt": "SingleLineText"},
-    {"column_name": "city", "title": "City", "uidt": "SingleLineText"},
-    {"column_name": "state", "title": "State", "uidt": "SingleLineText"},
-    {"column_name": "country", "title": "Country", "uidt": "SingleLineText"},
-    {"column_name": "website", "title": "Website", "uidt": "URL"},
-    {"column_name": "source", "title": "Source", "uidt": "SingleSelect", "dtxp": SOURCES},
-    {"column_name": "category", "title": "Category", "uidt": "SingleSelect", "dtxp": CATEGORIES},
-    {"column_name": "status", "title": "Status", "uidt": "SingleSelect", "dtxp": STATUSES, "cdf": "'New'"},
-    {"column_name": "owner", "title": "Owner", "uidt": "SingleLineText"},
-    {"column_name": "notes", "title": "Notes", "uidt": "LongText"},
-    {"column_name": "job_title", "title": "Job Title", "uidt": "SingleLineText"},
-    {"column_name": "job_url", "title": "Job URL", "uidt": "URL"},
-    {"column_name": "date_added", "title": "Date Added", "uidt": "Date"},
-    {"column_name": "source_file", "title": "Source File", "uidt": "SingleLineText"},
-]
-
-
-def main():
-    # -------- base (recreate if exists)
-    bases = api("GET", "/api/v2/meta/bases").get("list", [])
-    for b in bases:
-        if b["title"] == "Karma Leads":
-            print(f"Deleting existing base {b['id']}")
-            api("DELETE", f"/api/v2/meta/bases/{b['id']}")
-    base = api("POST", "/api/v2/meta/bases", json={"title": "Karma Leads"})
-    base_id = base["id"]
-    print("Base:", base_id)
-
-    table = api("POST", f"/api/v2/meta/bases/{base_id}/tables", json={
-        "table_name": "leads", "title": "Leads", "columns": COLUMNS,
-    })
-    table_id = table["id"]
-    cols = {c["title"]: c["id"] for c in table["columns"]}
-    print("Table:", table_id)
-
-    # -------- data
-    print("Parsing files:")
-    rows = collect()
-    print(f"Parsed total: {len(rows)}")
-    rows = dedupe(rows)
-    print(f"After dedupe: {len(rows)}")
-
-    for i in range(0, len(rows), 100):
-        batch = rows[i:i + 100]
-        api("POST", f"/api/v2/tables/{table_id}/records", json=batch)
-        print(f"  inserted {min(i + 100, len(rows))}/{len(rows)}", end="\r")
-    print()
-
-    # -------- views
-    def grid(title):
-        v = api("POST", f"/api/v2/meta/tables/{table_id}/grids", json={"title": title})
-        return v["id"]
-
-    def add_filter(view_id, col, op, value=None, sub_op=None):
-        body = {"fk_column_id": cols[col], "comparison_op": op}
-        if value is not None:
-            body["value"] = value
-        if sub_op:
-            body["comparison_sub_op"] = sub_op
-        api("POST", f"/api/v2/meta/views/{view_id}/filters", json=body)
-
-    v = grid("Recent leads")
-    add_filter(v, "Date Added", "isWithin", 30, "pastNumberOfDays")
-
-    v = grid("Job board leads")
-    add_filter(v, "Source", "eq", "Job board")
-
-    v = grid("Excel imports")
-    add_filter(v, "Source", "neq", "Job board")
-
-    v = grid("Uncontacted")
-    add_filter(v, "Status", "eq", "New")
-
-    kb = api("POST", f"/api/v2/meta/tables/{table_id}/kanbans", json={
-        "title": "Pipeline by status", "fk_grp_col_id": cols["Status"],
-    })
-    print("Views created (Recent, Job board, Excel imports, Uncontacted, Kanban)")
-
-    cfg = {"base_id": base_id, "table_id": table_id, "columns": cols}
-    (APP / "dashboard" / "nocodb_ids.json").write_text(json.dumps(cfg, indent=2))
-    print("Done. Open http://localhost:8080")
-
-
-if __name__ == "__main__":
-    main()
