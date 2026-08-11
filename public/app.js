@@ -1112,6 +1112,81 @@ function closeModal() {
   document.querySelector(".modal")?.classList.remove("wide");
 }
 
+/* ---------------- manage team (admin) ----------------
+   The UI over server/users.js. @karmastaff.com accounts appear here on their
+   own after first sign-in (auto-enrolment); this screen is for promoting
+   admins, disabling leavers, and pre-inviting outside emails. The server
+   holds the real rules — last-admin lockout etc. — we just show its errors. */
+async function openUsersModal() {
+  $("modal-title").textContent = "Manage team";
+  $("modal-body").innerHTML = `
+    <p class="modal-sub">Anyone with a company email joins as a <b>member</b> the
+      first time they sign in. Admins are promoted here — they get imports, job
+      search, this screen and the Team activity tab.</p>
+    <div id="users-list" class="users-list"><div class="modal-sub">Loading…</div></div>
+    <form id="user-add-row" class="user-add-row">
+      <input type="email" id="user-add-email" placeholder="invite an email outside the company…" required>
+      <select id="user-add-role"><option value="member" selected>member</option><option value="admin">admin</option></select>
+      <button type="submit" class="btn-secondary">Add</button>
+    </form>
+    <div id="users-error" class="login-error hidden"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn-secondary" id="modal-cancel">Close</button>
+    </div>`;
+  $("modal-backdrop").classList.remove("hidden");
+  $("modal-cancel").addEventListener("click", closeModal);
+  $("user-add-row").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    await usersCall("/api/users", "POST",
+      { email: $("user-add-email").value, role: $("user-add-role").value });
+    $("user-add-email").value = "";
+  });
+  await renderUsersList();
+}
+
+async function usersCall(path, method, body) {
+  const err = $("users-error");
+  err.classList.add("hidden");
+  try {
+    await api(path, { method, body: JSON.stringify(body) });
+    await renderUsersList();
+  } catch (ex) {
+    err.textContent = ex.message;
+    err.classList.remove("hidden");
+  }
+}
+
+async function renderUsersList() {
+  const { list } = await api("/api/users");
+  const rows = list.map((u) => {
+    const me = u.id === S.me.id;
+    const who = esc(u.display_name || u.email.split("@")[0]);
+    return `
+    <div class="user-row${u.disabled ? " user-disabled" : ""}">
+      <span class="avatar" style="background:${avColor(u.display_name || u.email)}">${initials(u.display_name || u.email)}</span>
+      <div class="user-id">
+        <div class="user-name">${who}${me ? " <span class='user-you'>(you)</span>" : ""}</div>
+        <div class="user-sub">${esc(u.email)}${u.disabled ? " · disabled"
+          : u.last_active ? " · active " + relTime(u.last_active) : ""}</div>
+      </div>
+      <select class="user-role" data-id="${u.id}" ${u.disabled ? "disabled" : ""}>
+        <option value="member"${u.role !== "admin" ? " selected" : ""}>member</option>
+        <option value="admin"${u.role === "admin" ? " selected" : ""}>admin</option>
+      </select>
+      <button type="button" class="btn-ghost user-toggle" data-id="${u.id}" data-disable="${!u.disabled}">
+        ${u.disabled ? "Restore" : "Disable"}</button>
+    </div>`;
+  }).join("");
+  $("users-list").innerHTML = rows || `<div class="modal-sub">No accounts yet.</div>`;
+  $("users-list").querySelectorAll(".user-role").forEach((sel) =>
+    sel.addEventListener("change", () =>
+      usersCall(`/api/users/${sel.dataset.id}`, "PATCH", { role: sel.value })));
+  $("users-list").querySelectorAll(".user-toggle").forEach((btn) =>
+    btn.addEventListener("click", () =>
+      usersCall(`/api/users/${btn.dataset.id}`, "PATCH",
+        { disabled: btn.dataset.disable === "true" })));
+}
+
 /* ---------------- LinkedIn job search (Apify) ----------------
    The 🔎 button runs a search with the saved settings (confirm step first,
    with a hard max-cost figure); the ⚙ gear edits them. Settings live in
@@ -1800,6 +1875,10 @@ function wire() {
   });
   document.addEventListener("click", () => $("user-dropdown")?.classList.add("hidden"));
   on("logout-btn", "click", logout);
+  on("manage-users-btn", "click", () => {
+    $("user-dropdown").classList.add("hidden");
+    openUsersModal();
+  });
   on("clear-recents", "click", async () => {
     // only forgets the trail — the leads themselves are untouched
     S.recents = [];
