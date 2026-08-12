@@ -1,7 +1,12 @@
 "use strict";
-/* LinkedIn job search via the Apify actor — the port of job-search.js onto
-   Postgres. The Apify half (token handling, input whitelist, live rates, cost
-   math) is carried over unchanged; the storage half is now one INSERT.
+/* Job search via Apify actors — the port of job-search.js onto Postgres.
+   The Apify half (token handling, input whitelist, live rates, cost math) is
+   carried over unchanged; the storage half is now one INSERT.
+
+   Two boards, one endpoint: the client picks a scraper key ("linkedin" or
+   "indeed") and everything else — input shape, rates, item mapping — is
+   resolved from the SCRAPERS registry below. Unknown keys fall back to
+   LinkedIn, so old clients keep working.
 
    Admin-only at the route level in index.js: this endpoint spends the org's
    Apify balance per result, which is the one thing a base user must not be
@@ -22,33 +27,59 @@ const router = express.Router();
 router.use(["/api/job-search", "/api/apify-usage"], requireAdmin);
 
 const APIFY = "https://api.apify.com/v2";
-const ACTOR = "fantastic-jobs~advanced-linkedin-job-search-api";
 
-/* fallback pay-per-result rates, used only when the live lookup fails */
+const SCRAPERS = {
+  linkedin: {
+    actor: "fantastic-jobs~advanced-linkedin-job-search-api",
+    label: "LinkedIn",
+    sourceFile: "LinkedIn search",
+  },
+  indeed: {
+    actor: "misceres~indeed-scraper",
+    label: "Indeed",
+    sourceFile: "Indeed search",
+  },
+};
+const scraperKey = (v) => (SCRAPERS[v] ? v : "linkedin");
+
+/* fallback pay-per-result rates, used only when the live lookup fails.
+   limitMax is our spend ceiling on both boards, not an actor limit. */
 const RATES = {
-  perResultUsd: 0.005,
-  recruiterPerResultUsd: 0.015,
-  limitMin: 10,
-  limitMax: 500,                  // our spend ceiling, not an actor limit
-  limitDefault: 100,
+  linkedin: {
+    perResultUsd: 0.005,
+    recruiterPerResultUsd: 0.015,
+    limitMin: 10,
+    limitMax: 500,
+    limitDefault: 100,
+  },
+  indeed: {
+    perResultUsd: 0.003,            // $3 / 1,000 job listings
+    limitMin: 10,
+    limitMax: 500,
+    limitDefault: 100,
+  },
 };
 
-let cachedRates = null, cachedRatesAt = 0;
-async function actorRates() {
-  if (cachedRates && Date.now() - cachedRatesAt < 6 * 3600e3) return cachedRates;
-  const a = await apify(`/acts/${ACTOR}`);
+const ratesCache = {};               // scraper key -> { rates, at }
+async function actorRates(key) {
+  const hit = ratesCache[key];
+  if (hit && Date.now() - hit.at < 6 * 3600e3) return hit.rates;
+  const a = await apify(`/acts/${SCRAPERS[key].actor}`);
   const infos = a?.data?.pricingInfos || [];
   const ev = infos[infos.length - 1]?.pricingPerEvent?.actorChargeEvents || {};
-  const per = ev["apify-default-dataset-item"]?.eventPriceUsd;
-  const rec = ev["recruiter-url-filtered-result"]?.eventPriceUsd;
-  cachedRates = {
-    ...RATES,
-    perResultUsd: typeof per === "number" ? per : RATES.perResultUsd,
-    recruiterPerResultUsd: typeof per === "number" && typeof rec === "number"
-      ? per + rec : RATES.recruiterPerResultUsd,
-  };
-  cachedRatesAt = Date.now();
-  return cachedRates;
+  /* each actor names its per-result event differently — take the standard
+     dataset-item event when present, else the first priced event */
+  const per = ev["apify-default-dataset-item"]?.eventPriceUsd
+    ?? Object.values(ev).find((e) => typeof e?.eventPriceUsd === "number")?.eventPriceUsd;
+  const rates = { ...RATES[key] };
+  if (typeof per === "number") rates.perResultUsd = per;
+  if (key === "linkedin") {
+    const rec = ev["recruiter-url-filtered-result"]?.eventPriceUsd;
+    rates.recruiterPerResultUsd = typeof per === "number" && typeof rec === "number"
+      ? per + rec : RATES.linkedin.recruiterPerResultUsd;
+  }
+  ratesCache[key] = { rates, at: Date.now() };
+  return rates;
 }
 
 function apifyToken() {
@@ -83,7 +114,7 @@ async function apify(pathname, opts = {}) {
   return text ? JSON.parse(text) : null;
 }
 
-/* ---------------- input whitelist (unchanged from job-search.js) */
+/* ---------------- input whitelists */
 const TIME_RANGES = ["1h", "24h", "7d", "6m"];
 const SENIORITIES = ["Internship", "Entry level", "Associate",
   "Mid-Senior level", "Director", "Executive"];
@@ -93,12 +124,12 @@ const EMPLOYMENT = ["FULL_TIME", "PART_TIME", "CONTRACTOR", "TEMPORARY", "INTERN
 const strList = (v, max = 15) => (Array.isArray(v) ? v : [])
   .map((s) => String(s).trim()).filter(Boolean).slice(0, max);
 const pickAllowed = (v, allowed) => strList(v).filter((s) => allowed.includes(s));
+const clampLimit = (v, r) =>
+  Math.min(Math.max(Math.round(+v) || r.limitDefault, r.limitMin), r.limitMax);
 
-function buildInput(p = {}) {
-  const limit = Math.min(Math.max(Math.round(+p.limit) || RATES.limitDefault,
-    RATES.limitMin), RATES.limitMax);
+function buildLinkedinInput(p = {}) {
   const input = {
-    limit,
+    limit: clampLimit(p.limit, RATES.linkedin),
     timeRange: TIME_RANGES.includes(p.timeRange) ? p.timeRange : "7d",
     descriptionType: "text",
   };
@@ -119,6 +150,26 @@ function buildInput(p = {}) {
   if (p.hasSalary === true) input.hasSalary = true;
   if (p.removeAgency === true) input.removeAgency = true;
   if (p.recruiterOnly === true) input.recruiterOnly = true;
+  return input;
+}
+
+/* misceres~indeed-scraper takes ONE search, not lists: the first title is the
+   position, the first location line the locality. Indeed wants the country as
+   its own field, so a trailing "United States" is stripped off the location
+   (a bare "United States" line means nationwide — no location at all). */
+function buildIndeedInput(p = {}) {
+  const titles = strList(p.titleSearch, 40);
+  const input = {
+    position: titles[0] || "",
+    country: "US",
+    maxItemsPerSearch: clampLimit(p.limit, RATES.indeed),
+    parseCompanyDetails: false,
+    saveOnlyUniqueItems: true,
+    followApplyRedirects: false,
+  };
+  const loc = (strList(p.locationSearch)[0] || "")
+    .replace(/,?\s*(united states|usa|us)\.?$/i, "").trim();
+  if (loc) input.location = loc;
   return input;
 }
 
@@ -155,14 +206,64 @@ function itemLocation(it) {
   return { city: loc.city || null, state: loc.admin || loc.admin_area || null };
 }
 
-/* ---------------- employers -> company leads
+/* Indeed's location is one display string — "Miami, FL 33130", "Remote", or
+   "Remote in Tampa, FL". Zip codes are noise for our columns. */
+function indeedLocation(s) {
+  const str = String(s || "").replace(/^remote(\s+in\s+)?/i, "").trim();
+  if (!str) return { city: null, state: null };
+  const parts = str.split(",").map((x) => x.replace(/\d{5}(-\d{4})?/g, "").trim())
+    .filter(Boolean);
+  return { city: parts[0] || null, state: parts[1] || null };
+}
+
+/* Indeed reports postedAt as relative text ("Just posted", "Active 3 days
+   ago", "30+ days ago") — turn it into a date, else fall back to today */
+function indeedPostedDate(s, stamp) {
+  const str = String(s || "");
+  if (/just posted|today/i.test(str)) return stamp;
+  const m = /(\d+)\+?\s*day/i.exec(str);
+  if (!m) return null;
+  const d = new Date(stamp + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() - +m[1]);
+  return d.toISOString().slice(0, 10);
+}
+
+/* one lead-shaped record per raw actor item, whatever the board */
+function normalizeItem(key, it, stamp) {
+  if (key === "indeed") {
+    const { city, state } = indeedLocation(it.location);
+    return {
+      title: it.positionName || "Job posting", org: clean(it.company),
+      contact: null, contactTitle: null, industry: null, employees: null,
+      city, state, url: it.url || null,
+      date: indeedPostedDate(it.postedAt, stamp) || stamp,
+    };
+  }
+  const { city, state } = itemLocation(it);
+  return {
+    title: it.title || "Job posting", org: clean(it.organization),
+    contact: it.recruiter_name || null, contactTitle: it.recruiter_title || null,
+    industry: it.org_linkedin_industry || null,
+    employees: Number.isFinite(+it.org_linkedin_headcount)
+      ? Math.round(+it.org_linkedin_headcount) : null,
+    city, state, url: it.url || null,
+    date: isoDate(it.date_posted) || stamp,
+  };
+}
+
+/* ---------------- employers -> company leads (LinkedIn only)
    Every scrape also upserts the company behind each posting, so the org lands
    on the Companies tab — logo included — the moment we see it hiring.
    Identity keeps the franchise guards: the base is matched on the name+city
    key (the org's LinkedIn HQ city, never the posting's location), while
    companies this source created earlier match on the organization name alone —
    within one job board the org name IS one LinkedIn entity, which keeps
-   repeat scrapes idempotent without risking a cross-source franchise merge. */
+   repeat scrapes idempotent without risking a cross-source franchise merge.
+
+   Indeed skips this on purpose: its items carry only a display name — no HQ,
+   logo, website or industry — and the "name alone within the Job board
+   source" rule above assumes one LinkedIn entity per name. Mixing a second
+   board into it would let a bare "SERVPRO" posting swallow franchises. */
 
 const httpUrl = (u) => {
   const s = String(u || "").trim();
@@ -275,8 +376,8 @@ async function resolveCompanies(items, stamp) {
   return out;
 }
 
-async function lastRunCost() {
-  const r = await apify(`/acts/${ACTOR}/runs/last`);
+async function lastRunCost(actor) {
+  const r = await apify(`/acts/${actor}/runs/last`);
   const d = r?.data || {};
   const counts2 = d.chargedEventCounts || {};
   const prices = d.pricingInfo?.pricingPerEvent?.actorChargeEvents || {};
@@ -294,28 +395,38 @@ async function lastRunCost() {
 
 router.post("/api/job-search", express.json({ limit: "64kb" }), async (req, res, next) => {
   try {
-    const input = buildInput(req.body || {});
+    const key = scraperKey(req.body?.scraper);
+    const scraper = SCRAPERS[key];
+    const input = key === "indeed"
+      ? buildIndeedInput(req.body || {}) : buildLinkedinInput(req.body || {});
+    if (key === "indeed" && !input.position)
+      return res.status(400).json({ error: "Indeed needs a job title to search for" });
+    const limit = key === "indeed" ? input.maxItemsPerSearch : input.limit;
     const known = await existingJobKeys();
 
     const items = await apify(
-      `/acts/${ACTOR}/run-sync-get-dataset-items?timeout=280&format=json&clean=true`,
+      `/acts/${scraper.actor}/run-sync-get-dataset-items?timeout=280&format=json&clean=true`,
       { method: "POST", body: JSON.stringify(input) });
-    const found = Array.isArray(items) ? items : [];
+    /* misceres reports "no matches" as one item with an error field */
+    const found = (Array.isArray(items) ? items : [])
+      .filter((it) => it && !it.error);
 
     const stamp = new Date().toISOString().slice(0, 10);
 
     /* employers first — even a duplicate posting can bring a logo or an org
        we have never stored, so this runs over everything the search found */
-    const companies = await resolveCompanies(found, stamp);
+    const companies = key === "linkedin"
+      ? await resolveCompanies(found, stamp)
+      : { ids: new Map(), inserted: 0, updated: 0 };
 
-    /* the actor's ats_duplicate flag marks overlap with the vendor's OTHER
+    /* LinkedIn's ats_duplicate flag marks overlap with the vendor's OTHER
        dataset, not duplication inside these results — don't drop on it */
     let duplicates = 0, inserted = 0;
     const seenUrls = new Set(), seenTitleOrgs = new Set();
     for (const it of found) {
-      const u = urlKey(it.url);
-      const { city, state } = itemLocation(it);
-      const k = titleOrgKey(it.title, it.organization, city);
+      const rec = normalizeItem(key, it, stamp);
+      const u = urlKey(rec.url);
+      const k = titleOrgKey(rec.title, rec.org, rec.city);
       if ((u && (known.urls.has(u) || seenUrls.has(u))) ||
           (k && (known.titleOrgs.has(k) || seenTitleOrgs.has(k)))) {
         duplicates++;
@@ -323,41 +434,39 @@ router.post("/api/job-search", express.json({ limit: "64kb" }), async (req, res,
       }
       if (u) seenUrls.add(u);
       if (k) seenTitleOrgs.add(k);
-      const org = clean(it.organization);
       await query(
         `INSERT INTO leads (lead_code, kind, name, company, contact, contact_title,
            industry, employees, city, state, job_url, source, source_file, date_added,
            company_lead_id)
          VALUES ($1, 'job', $2, $3, $4, $5, $6, $7, $8, $9, $10,
-                 'Job board', 'LinkedIn search', $11, $12)`,
-        [mintCode(), it.title || "Job posting", org,
-         it.recruiter_name || null, it.recruiter_title || null,
-         it.org_linkedin_industry || null,
-         Number.isFinite(+it.org_linkedin_headcount) ? Math.round(+it.org_linkedin_headcount) : null,
-         city, state, it.url || null,
-         isoDate(it.date_posted) || stamp,
-         org ? companies.ids.get(org.toLowerCase()) ?? null : null]);
+                 'Job board', $11, $12, $13)`,
+        [mintCode(), rec.title, rec.org, rec.contact, rec.contactTitle,
+         rec.industry, rec.employees, rec.city, rec.state, rec.url,
+         scraper.sourceFile, rec.date,
+         rec.org ? companies.ids.get(rec.org.toLowerCase()) ?? null : null]);
       inserted++;
     }
     counts.invalidate();
 
     let cost = null;
     try {
-      const rates = await actorRates().catch(() => RATES);
-      const perJob = input.recruiterOnly ? rates.recruiterPerResultUsd : rates.perResultUsd;
+      const rates = await actorRates(key).catch(() => RATES[key]);
+      const perJob = key === "linkedin" && input.recruiterOnly
+        ? rates.recruiterPerResultUsd : rates.perResultUsd;
       const computed = found.length * perJob + 0.0001;
-      const last = await lastRunCost().catch(() => ({}));
+      const last = await lastRunCost(scraper.actor).catch(() => ({}));
       const known2 = [computed, last.usd, last.usageTotalUsd]
         .filter((v) => typeof v === "number");
       cost = { usd: Math.max(...known2), status: last.status || null };
     } catch (e) { console.warn("could not compute run cost:", e.message); }
 
     activity.log({ actor: req.user.email, user_id: req.user.id, action: "jobsearch",
-      meta: { found: found.length, inserted, duplicates,
+      meta: { scraper: key, found: found.length, inserted, duplicates,
         companies: companies.inserted, costUsd: cost?.usd ?? null } });
 
     res.json({
-      input: { limit: input.limit, timeRange: input.timeRange },
+      scraper: key,
+      input: { limit, timeRange: input.timeRange },
       found: found.length, inserted, duplicates,
       companies: { inserted: companies.inserted, updated: companies.updated },
       cost,
@@ -367,10 +476,11 @@ router.post("/api/job-search", express.json({ limit: "64kb" }), async (req, res,
 
 router.get("/api/apify-usage", async (req, res, next) => {
   try {
-    const [limits, monthly, rates] = await Promise.all([
+    const [limits, monthly, linkedinRates, indeedRates] = await Promise.all([
       apify("/users/me/limits"),
       apify("/users/me/usage/monthly"),
-      actorRates().catch(() => RATES),
+      actorRates("linkedin").catch(() => RATES.linkedin),
+      actorRates("indeed").catch(() => RATES.indeed),
     ]);
     const L = limits?.data || limits || {};
     const M = monthly?.data || monthly || {};
@@ -386,7 +496,9 @@ router.get("/api/apify-usage", async (req, res, next) => {
       remainingUsd: maxUsd != null && usedUsd != null
         ? Math.max(0, maxUsd - usedUsd) : null,
       cycleEndsAt: cycle.endAt || null,
-      daily, rates,
+      daily,
+      rates: linkedinRates,       // legacy shape — pre-scraper clients read this
+      scraperRates: { linkedin: linkedinRates, indeed: indeedRates },
     });
   } catch (e) { next(e); }
 });

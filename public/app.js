@@ -1194,14 +1194,21 @@ async function renderUsersList() {
         { disabled: btn.dataset.disable === "true" })));
 }
 
-/* ---------------- LinkedIn job search (Apify) ----------------
+/* ---------------- job search (Apify) ----------------
    The 🔎 button runs a search with the saved settings (confirm step first,
    with a hard max-cost figure); the ⚙ gear edits them. Settings live in
    localStorage — they're personal defaults, not shared state. The Apify
-   token never reaches the browser: everything goes through the domain API. */
+   token never reaches the browser: everything goes through the domain API.
+   Two job boards, picked in settings: LinkedIn (the fantastic-jobs actor,
+   full filter set) and Indeed (misceres/indeed-scraper — one title + one
+   location per search, no filters, but a lower per-job price). */
 const JS_LS = "kl_jobsearch";
-const JS_RATES_FALLBACK = { perResultUsd: 0.005, recruiterPerResultUsd: 0.015,
-  limitMin: 10, limitMax: 500, limitDefault: 100 };
+const JS_SCRAPERS = [["linkedin", "LinkedIn"], ["indeed", "Indeed"]];
+const JS_RATES_FALLBACK = {
+  linkedin: { perResultUsd: 0.005, recruiterPerResultUsd: 0.015,
+    limitMin: 10, limitMax: 500, limitDefault: 100 },
+  indeed: { perResultUsd: 0.003, limitMin: 10, limitMax: 500, limitDefault: 100 },
+};
 const JS_TIME_RANGES = [["1h", "Last hour"], ["24h", "Last 24 hours"],
   ["7d", "Last 7 days"], ["6m", "All active jobs"]];
 const JS_ARRANGEMENTS = ["On-site", "Hybrid", "Remote OK", "Remote Solely"];
@@ -1234,10 +1241,18 @@ const JS_DEFAULTS = {
 
 let APIFY_USAGE = null;          // {usedUsd,maxUsd,remainingUsd,cycleEndsAt,daily,rates}
 
-const jsRates = () => APIFY_USAGE?.rates || JS_RATES_FALLBACK;
+const jsRates = (scraper = "linkedin") =>
+  APIFY_USAGE?.scraperRates?.[scraper] || JS_RATES_FALLBACK[scraper]
+    || JS_RATES_FALLBACK.linkedin;
+const jsBoard = (s) =>
+  (JS_SCRAPERS.find(([v]) => v === s.scraper) || JS_SCRAPERS[0])[1];
 /* results are billed per job actually returned, so limit × rate is a ceiling */
-const jsMaxCost = (s) => (+s.limit || jsRates().limitDefault) *
-  (s.recruiterOnly ? jsRates().recruiterPerResultUsd : jsRates().perResultUsd);
+const jsMaxCost = (s) => {
+  const r = jsRates(s.scraper);
+  return (+s.limit || r.limitDefault) *
+    (s.scraper === "linkedin" && s.recruiterOnly
+      ? r.recruiterPerResultUsd : r.perResultUsd);
+};
 const usd = (n) => n == null ? "—"
   : "$" + (+n >= 0.1 || +n === 0 ? (+n).toFixed(2) : (+n).toFixed(3));
 const splitCommas = (s) => String(s || "").split(/[,\n]/).map((x) => x.trim()).filter(Boolean);
@@ -1248,6 +1263,7 @@ function jsSettings() {
   try { s = JSON.parse(localStorage.getItem(JS_LS)) || {}; } catch (e) { /* fresh */ }
   // ?? not || — a deliberately emptied-and-saved field must stay empty
   return {
+    scraper: s.scraper === "indeed" ? "indeed" : "linkedin",
     titles: s.titles ?? JS_DEFAULTS.titles,
     locations: s.locations ?? JS_DEFAULTS.locations,
     timeRange: s.timeRange || JS_DEFAULTS.timeRange,
@@ -1320,7 +1336,14 @@ function openJobSearchSettings() {
   document.querySelector(".modal").classList.add("wide");
   $("modal-body").innerHTML = `
     ${usageCard()}
-    <form id="js-form">
+    <form id="js-form"${s.scraper === "indeed" ? ' class="indeed"' : ""}>
+      <div class="js-group-label">Job board</div>
+      <div class="check-grid">${JS_SCRAPERS.map(([v, l]) =>
+        `<label class="check"><input type="radio" name="js-scraper" value="${v}"
+           ${v === s.scraper ? " checked" : ""}> ${l}</label>`).join("")}</div>
+      <div class="dz-sub in-only">Indeed runs one search at a time — only the
+        first job title and the first location are used, and the advanced
+        LinkedIn filters don't apply.</div>
       <label>Job titles — comma-separated, blank = any
         <input id="js-titles" value="${esc(s.titles)}"
                placeholder="Insurance Adjuster, Claims Adjuster">
@@ -1330,7 +1353,7 @@ function openJobSearchSettings() {
           placeholder="Miami, Florida, United States">${esc(s.locations)}</textarea>
       </label>
       <div class="js-two">
-        <label>Posted within
+        <label class="li-only">Posted within
           <select id="js-time">${JS_TIME_RANGES.map(([v, l]) =>
             `<option value="${v}"${v === s.timeRange ? " selected" : ""}>${l}</option>`).join("")}
           </select>
@@ -1340,7 +1363,7 @@ function openJobSearchSettings() {
                  max="${jsRates().limitMax}" value="${s.limit}">
         </label>
       </div>
-      <details class="js-adv"${advancedUsed ? " open" : ""}>
+      <details class="js-adv li-only"${advancedUsed ? " open" : ""}>
         <summary>Advanced filters</summary>
         <div class="js-group-label">Work arrangement</div>
         <div class="check-grid">${JS_ARRANGEMENTS.map((a) =>
@@ -1380,6 +1403,8 @@ function openJobSearchSettings() {
   $("modal-backdrop").classList.remove("hidden");
 
   const collect = () => ({
+    scraper: (document.querySelector('#js-form [name="js-scraper"]:checked')
+      || {}).value === "indeed" ? "indeed" : "linkedin",
     titles: $("js-titles").value.trim(),
     locations: $("js-locations").value.trim(),
     timeRange: $("js-time").value,
@@ -1397,10 +1422,15 @@ function openJobSearchSettings() {
   });
   const estimate = () => {
     const c = collect();
-    const rate = c.recruiterOnly ? jsRates().recruiterPerResultUsd : jsRates().perResultUsd;
+    // the picker doubles as a mode switch: Indeed hides the LinkedIn-only rows
+    $("js-form").classList.toggle("indeed", c.scraper === "indeed");
+    const recruiter = c.scraper === "linkedin" && c.recruiterOnly;
+    const rate = recruiter
+      ? jsRates(c.scraper).recruiterPerResultUsd : jsRates(c.scraper).perResultUsd;
     const per1k = "$" + (rate * 1000).toFixed(2) + " per 1,000";
-    $("js-estimate").innerHTML = `Maximum cost: <strong>${usd(jsMaxCost(c))}</strong>
-      for up to ${c.limit} jobs${c.recruiterOnly
+    $("js-estimate").innerHTML = `Maximum cost on ${jsBoard(c)}:
+      <strong>${usd(jsMaxCost(c))}</strong>
+      for up to ${c.limit} jobs${recruiter
         ? ` <span class="js-price-warn">recruiter rate — ${per1k}</span>`
         : ` · ${per1k}`}`;
   };
@@ -1428,7 +1458,17 @@ function openJobSearchSettings() {
 function openJobSearchConfirm() {
   const s = jsSettings();
   if (!s.saved) { openJobSearchSettings(); return; }
-  const titles = splitCommas(s.titles), locations = splitLines(s.locations);
+  const indeed = s.scraper === "indeed";
+  // Indeed runs one search — confirm exactly what will be sent, not the list
+  const titles = indeed
+    ? splitCommas(s.titles).slice(0, 1) : splitCommas(s.titles);
+  const locations = indeed
+    ? splitLines(s.locations).slice(0, 1) : splitLines(s.locations);
+  if (indeed && !titles.length) {   // the server 400s on a blank position
+    toast("Indeed needs a job title — add one in settings");
+    openJobSearchSettings();
+    return;
+  }
   const keywords = splitCommas(s.description);
   const timeLabel = (JS_TIME_RANGES.find(([v]) => v === s.timeRange) || [, "?"])[1];
   const max = jsMaxCost(s);
@@ -1437,16 +1477,17 @@ function openJobSearchConfirm() {
     ? `${arr.slice(0, n).join(", ")} +${arr.length - n} more` : arr.join(", ");
   const row = (label, val) => val
     ? `<div class="ir-row"><span>${label}</span><strong>${esc(val)}</strong></div>` : "";
-  $("modal-title").textContent = "Search LinkedIn jobs?";
+  $("modal-title").textContent = `Search ${jsBoard(s)} jobs?`;
   $("modal-body").innerHTML = `
     <div class="import-report">
+      ${row("Job board", jsBoard(s))}
       ${row("Job titles", brief(titles, 3) || "Any")}
       ${row("Locations", brief(locations, 2) || "Anywhere")}
-      ${row("Company keywords", brief(keywords, 3))}
-      ${row("Posted within", timeLabel)}
-      ${s.maxEmployees ? row("Company size", `≤ ${s.maxEmployees} employees`) : ""}
+      ${indeed ? "" : row("Company keywords", brief(keywords, 3))}
+      ${indeed ? "" : row("Posted within", timeLabel)}
+      ${!indeed && s.maxEmployees ? row("Company size", `≤ ${s.maxEmployees} employees`) : ""}
       ${row("Max results", String(s.limit))}
-      ${s.recruiterOnly ? row("Recruiter contacts", "On — higher rate") : ""}
+      ${!indeed && s.recruiterOnly ? row("Recruiter contacts", "On — higher rate") : ""}
     </div>
     <p class="modal-note">Costs at most <strong>${usd(max)}</strong> — you only pay
       for jobs actually returned.${APIFY_USAGE?.remainingUsd != null
@@ -1464,11 +1505,11 @@ function openJobSearchConfirm() {
 
 async function runJobSearch() {
   const s = jsSettings();
-  $("modal-title").textContent = "Searching LinkedIn";
+  $("modal-title").textContent = `Searching ${jsBoard(s)}`;
   $("modal-body").innerHTML = `
     <div class="import-busy">
       <div class="spinner"></div>
-      <div><strong>Searching LinkedIn jobs…</strong></div>
+      <div><strong>Searching ${jsBoard(s)} jobs…</strong></div>
       <div class="dz-sub">Usually 10–60 seconds. New jobs land in the Job board tab.</div>
     </div>`;
   $("modal-backdrop").classList.remove("hidden");
@@ -1476,6 +1517,7 @@ async function runJobSearch() {
     const out = await api("/api/job-search", {
       method: "POST",
       body: JSON.stringify({
+        scraper: s.scraper,
         titleSearch: splitCommas(s.titles),
         locationSearch: splitLines(s.locations),
         timeRange: s.timeRange,
@@ -1689,7 +1731,7 @@ function feedLine(f) {
     case "restore": return `restored ${name}`;
     case "import": return `imported <b>${esc(f.to_value || "a file")}</b>` +
       (m.inserted ? ` <span class="feed-what">(${JSON.stringify(m.inserted).replace(/[{}"]/g, "")})</span>` : "");
-    case "jobsearch": return `ran a job search <span class="feed-what">(${m.found ?? "?"} found, ${m.inserted ?? "?"} new${
+    case "jobsearch": return `ran a${m.scraper === "indeed" ? "n Indeed" : " LinkedIn"} job search <span class="feed-what">(${m.found ?? "?"} found, ${m.inserted ?? "?"} new${
       m.companies ? `, ${m.companies} compan${m.companies === 1 ? "y" : "ies"}` : ""})</span>`;
     default: return esc(f.action);
   }
