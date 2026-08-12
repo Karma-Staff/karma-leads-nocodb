@@ -1000,35 +1000,82 @@ body.dragging #import-btn { outline: 3px solid var(--accent-soft); }
 }
 .ir-row:last-child { border-bottom: none; }
 .ir-row strong { color: var(--ink); }
+/* a value too long to sit opposite its label — a Google query line, say */
+.ir-row.ir-wrap { display: block; }
+.ir-row.ir-wrap strong { display: block; margin-top: 4px; }
+.ir-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px; font-weight: 500; line-height: 1.5; word-break: break-word;
+}
 
-/* ---------- job search (LinkedIn / Indeed) ---------- */
-/* the board picker doubles as a mode switch: Indeed hides the LinkedIn-only
-   controls (.li-only) and reveals its own note (.in-only) */
-#js-form.indeed .li-only { display: none; }
-#js-form:not(.indeed) .in-only { display: none; }
+/* ---------- job search (LinkedIn / Indeed / Google Jobs) ---------- */
+/* the board picker doubles as a mode switch: each board hides the controls it
+   cannot use — .li-only is LinkedIn's filter set, .in-only is Indeed's boolean
+   searches, .g-only is Google's one-line query, and .no-in is the pair the two
+   query-line boards share (the results cap). Every board's own rows are named
+   positively; nothing is left visible by omission. */
+#js-form:not(.js-linkedin) .li-only { display: none; }
+#js-form:not(.js-indeed) .in-only { display: none; }
+#js-form:not(.js-google) .g-only { display: none; }
+#js-form.js-indeed .no-in { display: none; }
+#js-form.js-google .no-g { display: none; }
 /* the whole form takes the active board's brand colour, so the mode banner and
    the cost chip shift with the choice, not just the selected card */
 #js-form { --brand: #0a66c2; --brand-soft: #eaf2fb; }
-#js-form.indeed { --brand: #003a9b; --brand-soft: #e9eef9; }
+#js-form.js-indeed { --brand: #003a9b; --brand-soft: #e9eef9; }
+#js-form.js-google { --brand: #1a73e8; --brand-soft: #e8f0fe; }
 
-/* the two boards behave differently enough (price, filters, whether companies
-   are created) that the choice gets full brand cards, not a radio pair */
+/* the three boards behave differently enough (price model, filters, whether
+   companies are created) that the choice gets brand cards, not a radio row */
 .board-linkedin { --brand: #0a66c2; --brand-soft: #eaf2fb; }
 .board-indeed { --brand: #003a9b; --brand-soft: #e9eef9; }
+.board-google { --brand: #1a73e8; --brand-soft: #e8f0fe; }
 :root[data-theme="dark"] #js-form,
 :root[data-theme="dark"] .board-linkedin { --brand: #4a9be8; --brand-soft: #14263c; }
-:root[data-theme="dark"] #js-form.indeed,
+:root[data-theme="dark"] #js-form.js-indeed,
 :root[data-theme="dark"] .board-indeed { --brand: #7ba0ff; --brand-soft: #18213d; }
+:root[data-theme="dark"] #js-form.js-google,
+:root[data-theme="dark"] .board-google { --brand: #8ab4f8; --brand-soft: #16243a; }
 
+/* ---- the settings panel itself
+   Three boards, and three boards' worth of filters, stopped fitting a 420px
+   dialog: the form became a column you scroll past rather than a set of
+   choices you compare. So this one modal is a working surface — wide enough
+   for the cards to sit side by side and for the filters to run two-up, with
+   the full-width rows (picker, the paired fields, advanced, the price line)
+   spanning both columns so the reading order still goes straight down. */
+.modal.js-panel {
+  width: min(880px, calc(100vw - 48px));
+  max-height: 90vh;
+}
+.modal.js-panel #js-form {
+  display: grid; grid-template-columns: 1fr 1fr;
+  gap: 0 20px; align-items: start;
+}
+.modal.js-panel #js-form > .js-group-label,
+.modal.js-panel #js-form > .board-picker,
+.modal.js-panel #js-form > .js-two,
+.modal.js-panel #js-form > .js-adv,
+.modal.js-panel #js-form > .js-estimate,
+.modal.js-panel #js-form > .modal-actions { grid-column: 1 / -1; }
+/* the paired fields and the checkbox groups get the room too — at this width
+   a two-column check grid was leaving half the panel empty */
+.modal.js-panel .js-two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.modal.js-panel .check-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.modal.js-panel .board-picker { gap: 12px; }
+
+/* three across: ~150px a card at the old width, so the card sheds what it can —
+   short names, a tick lifted out of the head row, tighter padding */
 .board-picker {
-  display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px;
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+  margin-bottom: 14px;
 }
 /* these are <label>s inside .modal, so they have to out-specify `.modal label`
    and `.modal input` — hence the #js-form prefixes */
 .modal .board-card {
   position: relative; display: block; cursor: pointer; margin-bottom: 0;
   border: 2px solid var(--border); border-radius: 5px;
-  background: var(--surface-2); padding: 12px 13px 12px;
+  background: var(--surface-2); padding: 11px 11px 12px;
   transition: border-color .12s, background .12s, opacity .12s;
 }
 /* the radio still carries the value and the keyboard behaviour */
@@ -1043,30 +1090,36 @@ body.dragging #import-btn { outline: 3px solid var(--accent-soft); }
   opacity: 1; border-color: var(--brand); background: var(--brand-soft);
 }
 .board-card:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
-.board-head { display: flex; align-items: center; gap: 8px; }
-.board-mark { width: 24px; height: 24px; flex: none; display: block; }
-.board-name {
-  font-size: 16px; font-weight: 700; letter-spacing: -.01em; color: var(--ink);
+/* the padding is the tick's corner — the name must not run under it */
+.board-head {
+  display: flex; align-items: center; gap: 7px; min-width: 0; padding-right: 14px;
 }
+.board-mark { width: 22px; height: 22px; flex: none; display: block; }
+.board-name {
+  font-size: 15px; font-weight: 700; letter-spacing: -.01em; color: var(--ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* out of the head row and into the corner — three-up, the name needs the width */
 .board-tick {
-  margin-left: auto; width: 18px; height: 18px; border-radius: 50%;
-  background: var(--brand); color: #fff; font-size: 11px; font-weight: 700;
+  position: absolute; top: 8px; right: 8px;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: var(--brand); color: #fff; font-size: 10px; font-weight: 700;
   display: grid; place-items: center; opacity: 0;
 }
 :root[data-theme="dark"] .board-tick { color: #10131a; }
 .board-card.on .board-tick { opacity: 1; }
 .board-price {
-  display: block; margin-top: 10px; font-size: 17px; font-weight: 700;
+  display: block; margin-top: 9px; font-size: 16px; font-weight: 700;
   color: var(--ink); line-height: 1.1;
 }
 .board-price small {
-  display: block; font-size: 11px; font-weight: 500; color: var(--ink-3);
-  margin-top: 2px;
+  display: block; font-size: 10px; font-weight: 500; color: var(--ink-3);
+  margin-top: 2px; line-height: 1.3;
 }
 .board-tag {
-  display: inline-block; margin-top: 8px; padding: 2px 7px; border-radius: 3px;
-  background: var(--brand); color: #fff;
-  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+  display: inline-block; margin-top: 8px; padding: 2px 6px; border-radius: 3px;
+  background: var(--brand); color: #fff; white-space: nowrap;
+  font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
 }
 :root[data-theme="dark"] .board-tag { color: #10131a; }
 /* the board name, wherever it has to travel outside a card */
@@ -1076,6 +1129,7 @@ body.dragging #import-btn { outline: 3px solid var(--accent-soft); }
 }
 .board-chip-linkedin { background: #0a66c2; }
 .board-chip-indeed { background: #003a9b; }
+.board-chip-google { background: #1a73e8; }
 /* On the blue primary button the brand fills can't hold their own — invert.
    Smaller and unshouted than the modal chips: it has to sit on ONE line beside
    the label so the button stays exactly as tall as ⬆ Import leads. */
@@ -1085,6 +1139,7 @@ body.dragging #import-btn { outline: 3px solid var(--accent-soft); }
 }
 .js-board-tag.board-chip-linkedin { color: #0a66c2; background: #fff; }
 .js-board-tag.board-chip-indeed { color: #003a9b; background: #fff; }
+.js-board-tag.board-chip-google { color: #1a73e8; background: #fff; }
 
 /* the confirm step leads with the board — this is the click that spends money */
 .board-banner {
@@ -1095,12 +1150,26 @@ body.dragging #import-btn { outline: 3px solid var(--accent-soft); }
 .board-banner .board-mark { width: 30px; height: 30px; }
 .board-banner-name { font-size: 17px; font-weight: 700; line-height: 1.1; }
 .board-banner-sub { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
+/* two boards to swap to, not one — they stack in the banner's right-hand
+   column so the banner keeps its height whichever board is armed */
+.board-swaps {
+  margin-left: auto; flex: none; display: flex; flex-direction: column; gap: 4px;
+}
 .board-swap {
-  margin-left: auto; flex: none; font-size: 11.5px; font-weight: 600;
+  flex: none; font-size: 11.5px; font-weight: 600; white-space: nowrap;
   color: var(--ink-2); background: var(--surface);
-  border: 1px solid var(--border); border-radius: 4px; padding: 6px 9px;
+  border: 1px solid var(--border); border-radius: 4px; padding: 4px 9px;
 }
 .board-swap:hover { color: var(--ink); border-color: var(--ink-3); }
+
+/* the one-line note under a field the active board reads differently */
+.js-hint {
+  display: block; margin-top: 5px; font-size: 11.5px; line-height: 1.45;
+  color: var(--ink-3);
+}
+#js-form textarea#js-query {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+}
 
 .job-search-row { display: flex; gap: 6px; margin-bottom: 6px; }
 /* label and armed-board chip on one line. The 19px line-height is the height
@@ -1221,4 +1290,15 @@ label.check input[type="checkbox"] { width: auto; margin: 0; accent-color: var(-
   .stats { grid-template-columns: 1fr; }
   .stat { border-right: none; }
   .stat:last-child { border-bottom: none; }
+  /* the modal is 520px wide — below that, three cards across stop fitting */
+  .modal.wide { width: auto; max-width: calc(100vw - 24px); }
+  .board-picker { grid-template-columns: 1fr; }
+  .board-swaps { flex-direction: row; }
+}
+/* the settings panel drops to one column before the fields get too narrow to
+   read — well above the phone breakpoint above */
+@media (max-width: 780px) {
+  .modal.js-panel { width: auto; max-width: calc(100vw - 24px); }
+  .modal.js-panel #js-form { grid-template-columns: 1fr; }
+  .modal.js-panel .check-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

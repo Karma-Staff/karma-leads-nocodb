@@ -281,7 +281,7 @@
 <div class="diagram">
   <div class="row">
     <div class="box"><b>Sources</b>
-      <div class="p">spreadsheets · LinkedIn via Apify</div>
+      <div class="p">spreadsheets · LinkedIn, Indeed &amp; Google Jobs via Apify</div>
     </div>
     <span class="arrow">→</span>
     <div class="box hi"><b>Domain API</b>
@@ -306,8 +306,8 @@
     </div>
     <div class="box"><b>Path C — job search</b>
       <div class="p">POST /api/job-search (admins)</div>
-      Additive, and the only path that costs money. Queries LinkedIn
-      through Apify and appends to the job board.
+      Additive, and the only path that costs money. Queries LinkedIn,
+      Indeed or Google Jobs through Apify and appends to the job board.
     </div>
   </div>
 </div>
@@ -782,7 +782,7 @@ app.get("/api/activity", ...);        <span class="cmt">// admin: the Team activ
       <td>refreshing from the source files. <b>The everyday path.</b></td>
       <td>no — never deletes</td></tr>
   <tr><td><b>B</b> — the drop zone</td><td>one-off spreadsheets</td><td>no</td></tr>
-  <tr><td><b>C</b> — 🔎 Find jobs</td><td>fresh LinkedIn postings</td><td>no</td></tr>
+  <tr><td><b>C</b> — 🔎 Find jobs</td><td>fresh postings — LinkedIn, Indeed or Google</td><td>no</td></tr>
 </table>
 <p>
   Path A′ is the one that changed the character of this project. It reads the same
@@ -888,13 +888,44 @@ app.get("/api/activity", ...);        <span class="cmt">// admin: the Team activ
   when a file wasn't understood.
 </p>
 
-<h3 id="import-jobs">Path C — the LinkedIn job search <span class="pill">additive</span></h3>
+<h3 id="import-jobs">Path C — the job search <span class="pill">additive</span></h3>
 <p>
-  <b>🔎 Find jobs</b> queries the Apify actor
-  <code>fantastic-jobs/advanced-linkedin-job-search-api</code> and appends the
-  results to the job board. It is not a scraper — the actor serves a pre-built
-  index, so a run returns in two to four seconds.
+  <b>🔎 Find jobs</b> runs an Apify actor and appends the results to the job
+  board. Three boards share the one endpoint; the settings panel picks which,
+  and everything else — actor input, rates, item mapping — is resolved from the
+  <code>SCRAPERS</code> registry in <span class="file">server/jobsearch.js</span>.
 </p>
+<table>
+  <tr><th>Board</th><th>Actor</th><th>Shape of a search</th><th>Price</th></tr>
+  <tr><td><b>LinkedIn</b></td>
+      <td><code>fantastic-jobs/advanced-linkedin-job-search-api</code></td>
+      <td>Title list × location list, full filter set. Also upserts the employer
+          as a company lead.</td>
+      <td>$5.00 / 1,000 jobs<br>($15 with recruiters)</td></tr>
+  <tr><td><b>Indeed</b></td>
+      <td><code>misceres/indeed-scraper</code></td>
+      <td>One title, one location, no filters. Jobs only.</td>
+      <td>$3.00 / 1,000 jobs</td></tr>
+  <tr><td><b>Google Jobs</b></td>
+      <td><code>johnvc/google-jobs-scraper</code></td>
+      <td>One query line across every board Google indexes. No company-size or
+          posted-within filter. Jobs only, and without locations.</td>
+      <td>$0.11 per page of ~10</td></tr>
+</table>
+<p>
+  None of them is a live scrape from our side — the actors serve pre-built
+  indexes or Google's own feed, so a run returns in seconds.
+</p>
+<div class="note">
+  <strong>Google's <code>location</code> is the location you searched, not the
+  job's.</strong> The actor stamps the search area onto every row: a
+  "Tampa, FL" search comes back with Paul Davis of North Dallas, ServiceMaster of
+  Euless TX and SERVPRO of Duncanville, all three labelled "Tampa, FL". Writing
+  that into <code>city</code>/<code>state</code> would invent a place for every
+  Google lead, so <code>normalizeItem()</code> stores <code>NULL</code> for both.
+  Blank beats wrong — and this is the one source where the blank is deliberate,
+  not a gap in <code>backfill_states()</code>.
+</div>
 
 <div class="diagram">
   <div class="row">
@@ -926,8 +957,8 @@ app.get("/api/activity", ...);        <span class="cmt">// admin: the Team activ
 
 <h4 style="font-size:15px;margin:22px 0 8px">Knowing the cost</h4>
 <p>
-  Billing is per job returned. Two figures matter, and they are <em>different</em>
-  figures:
+  Billing is per job returned on LinkedIn and Indeed, and per <em>page</em> of ten
+  on Google. Two figures matter, and they are <em>different</em> figures:
 </p>
 <table>
   <tr><th>When</th><th>What we show</th><th>Where it comes from</th></tr>
@@ -951,6 +982,18 @@ app.get("/api/activity", ...);        <span class="cmt">// admin: the Team activ
   the live <code>pricingPerEvent</code> off the actor and caches it for six hours,
   so a vendor price change updates the estimates instead of quietly making them
   wrong. The hardcoded rates in <code>RATES</code> are only a fallback.
+</div>
+<div class="note">
+  <strong>Google is priced by the page, and the page price is tiered.</strong>
+  Its per-result event costs $0.00001 — three orders of magnitude under the truth.
+  Reading that as "the rate" (as the other two boards do) would quote a $5 search
+  at half a cent, so <code>actorRates()</code> prices
+  <code>page_processed</code> instead, at the row for our Apify plan tier
+  ($0.15 free, $0.11 on ours) via <code>/users/me</code>. A page half full of
+  results costs the same as a full one, and a search that finds nothing still pays
+  for the one page inquiry it made — so the ceiling counts whole pages, the input
+  caps <code>max_pagination</code> at exactly that many, and the run carries a
+  <code>maxTotalChargeUsd</code> belt on top.
 </div>
 <div class="note">
   <strong>Why not just read <code>usageTotalUsd</code> off the run?</strong>

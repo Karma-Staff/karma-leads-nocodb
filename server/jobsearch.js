@@ -3,10 +3,10 @@
    The Apify half (token handling, input whitelist, live rates, cost math) is
    carried over unchanged; the storage half is now one INSERT.
 
-   Two boards, one endpoint: the client picks a scraper key ("linkedin" or
-   "indeed") and everything else — input shape, rates, item mapping — is
-   resolved from the SCRAPERS registry below. Unknown keys fall back to
-   LinkedIn, so old clients keep working.
+   Three boards, one endpoint: the client picks a scraper key ("linkedin",
+   "indeed" or "google") and everything else — input shape, rates, item
+   mapping — is resolved from the SCRAPERS registry below. Unknown keys fall
+   back to LinkedIn, so old clients keep working.
 
    Indeed is one run per *query*, not per title: the actor's `title` field is
    handed straight to Indeed's q, so one string can carry a whole boolean
@@ -48,13 +48,24 @@ const SCRAPERS = {
        per GB, so 2 GB would double that fee for no measured gain. */
     memoryMbytes: 1024,
   },
+  google: {
+    actor: "johnvc~google-jobs-scraper",
+    label: "Google Jobs",
+    sourceFile: "Google Jobs search",
+  },
 };
 const scraperKey = (v) => (SCRAPERS[v] ? v : "linkedin");
 
-/* fallback pay-per-result rates, used only when the live lookup fails.
-   limitMax is our spend ceiling, and on Indeed it is also the actor's own
-   ceiling (its schema caps `limit` at 1000). startUsd is the per-run start
-   event — negligible alone, but Indeed pays it once per batched query. */
+/* fallback rates, used only when the live lookup fails. limitMax is our spend
+   ceiling — on Indeed it happens to be the actor's own too (its schema caps
+   `limit` at 1000). startUsd is the per-run start event: negligible alone, but
+   Indeed pays it once per batched query.
+
+   Google is the odd one out: it is billed per PAGE of search results fetched
+   (~10 jobs a page), not per job, and a page half full of results costs the
+   same as a full one. perResultUsd is that page price spread over a full page
+   so the shared "limit x rate" ceiling still holds — pagePriceUsd/resultsPerPage
+   are what the real arithmetic uses. */
 const RATES = {
   linkedin: {
     perResultUsd: 0.005,
@@ -71,44 +82,85 @@ const RATES = {
     limitMax: 1000,
     limitDefault: 250,
   },
+  google: {
+    pagePriceUsd: 0.11,             // $0.11 / page on our paid plan, $0.15 free
+    resultsPerPage: 10,
+    perResultUsd: 0.011,
+    limitMin: 10,
+    limitMax: 500,
+    limitDefault: 100,
+  },
 };
 
-/* Apify prices an event either flat (eventPriceUsd) or per plan tier
-   (eventTieredPricingUsd) — valig~indeed-jobs-scraper uses the tiered shape.
-   The account's tier isn't visible here, so take the dearest one: every figure
-   derived from this is a "costs at most" ceiling shown before spending. */
-function eventUsd(e) {
-  if (typeof e?.eventPriceUsd === "number") return e.eventPriceUsd;
-  const tiers = Object.values(e?.eventTieredPricingUsd || {})
-    .map((t) => t?.tieredEventPriceUsd)
-    .filter((n) => typeof n === "number");
-  return tiers.length ? Math.max(...tiers) : undefined;
+/* an actor charge event's price: flat when the actor prices it flatly, else the
+   row for our Apify plan tier. Both boards that came after LinkedIn price per
+   tier — Google's page fee ($0.15 free, $0.11 on ours) carries no flat price
+   at all, so reading only eventPriceUsd would quote a $5 search at nothing,
+   and valig~indeed-jobs-scraper uses the same tiered shape. */
+function eventPrice(ev, tier) {
+  if (!ev) return null;
+  if (typeof ev.eventPriceUsd === "number") return ev.eventPriceUsd;
+  const row = ev.eventTieredPricingUsd?.[tier] || ev.eventTieredPricingUsd?.FREE;
+  return typeof row?.tieredEventPriceUsd === "number" ? row.tieredEventPriceUsd : null;
+}
+
+let tierCache = { tier: null, at: 0 };
+async function accountTier() {
+  if (tierCache.tier && Date.now() - tierCache.at < 6 * 3600e3) return tierCache.tier;
+  // FREE is the dearest tier — quoting it when the lookup fails never under-quotes
+  const me = await apify("/users/me").catch(() => null);
+  tierCache = { tier: me?.data?.plan?.tier || "FREE", at: Date.now() };
+  return tierCache.tier;
 }
 
 const ratesCache = {};               // scraper key -> { rates, at }
 async function actorRates(key) {
   const hit = ratesCache[key];
   if (hit && Date.now() - hit.at < 6 * 3600e3) return hit.rates;
-  const a = await apify(`/acts/${SCRAPERS[key].actor}`);
+  const [a, tier] = await Promise.all([
+    apify(`/acts/${SCRAPERS[key].actor}`),
+    accountTier(),
+  ]);
   const infos = a?.data?.pricingInfos || [];
   const ev = infos[infos.length - 1]?.pricingPerEvent?.actorChargeEvents || {};
+  const rates = { ...RATES[key] };
+  if (key === "google") {
+    /* the dataset-item event exists here too, at $0.00001 — three orders of
+       magnitude under the real price. Price the page, not the row. */
+    const page = eventPrice(ev.page_processed, tier);
+    const item = eventPrice(ev["apify-default-dataset-item"], tier) || 0;
+    if (typeof page === "number") {
+      rates.pagePriceUsd = page;
+      rates.perResultUsd = page / rates.resultsPerPage + item;
+    }
+    ratesCache[key] = { rates, at: Date.now() };
+    return rates;
+  }
   /* each actor names its per-result event differently — take the standard
      dataset-item event when present, else the first priced event */
-  const per = eventUsd(ev["apify-default-dataset-item"])
-    ?? Object.values(ev).map(eventUsd).find((n) => typeof n === "number");
-  const rates = { ...RATES[key] };
+  const per = eventPrice(ev["apify-default-dataset-item"], tier)
+    ?? Object.values(ev).map((e) => eventPrice(e, tier))
+      .find((v) => typeof v === "number");
   if (typeof per === "number") rates.perResultUsd = per;
-  const start = eventUsd(ev["apify-actor-start"]);
+  const start = eventPrice(ev["apify-actor-start"], tier);
   if (typeof start === "number")
     rates.startUsd = start * Math.max(1, (SCRAPERS[key].memoryMbytes || 0) / 1024);
   if (key === "linkedin") {
-    const rec = eventUsd(ev["recruiter-url-filtered-result"]);
+    const rec = eventPrice(ev["recruiter-url-filtered-result"], tier);
     rates.recruiterPerResultUsd = typeof per === "number" && typeof rec === "number"
       ? per + rec : RATES.linkedin.recruiterPerResultUsd;
   }
   ratesCache[key] = { rates, at: Date.now() };
   return rates;
 }
+
+/* pages are the billed unit on Google, and a search for 55 jobs still pays for
+   six whole pages — round the ask up so the quote can never come in under */
+const googlePages = (limit) => {
+  const n = Number.isFinite(+limit) ? Math.max(0, +limit) : RATES.google.limitDefault;
+  // a search that finds nothing still pays for the one page inquiry it made
+  return Math.max(1, Math.ceil(n / RATES.google.resultsPerPage));
+};
 
 function apifyToken() {
   const env = (process.env.APIFY_TOKEN || "").trim();
@@ -224,6 +276,50 @@ function buildIndeedInputs(p = {}) {
   return queries.map((title) => ({ ...base, title }));
 }
 
+/* johnvc~google-jobs-scraper takes ONE query line — no title list, no keyword
+   list, no company-size or posted-within filter. So the LinkedIn shape has to
+   collapse into a string: the titles quoted and OR'd decide the role, the
+   description keywords quoted and OR'd decide the industry, and the two groups
+   sit side by side (Google ANDs them). The client normally sends its own
+   `query`; composing from the shared title/keyword fields is the fallback that
+   keeps a client which only knows the LinkedIn fields working.
+
+   Only the leading few of each list survive. Google Jobs answers a focused
+   line and returns noise for a 300-character one — and every extra page of
+   noise is another $0.11. */
+const quoted = (s) => (/\s/.test(s) ? `"${s}"` : s);
+const orGroup = (list, n) => list.slice(0, n).map(quoted).join(" OR ");
+
+function googleQuery(p = {}) {
+  const explicit = String(p.query || "").trim();
+  if (explicit) return explicit.slice(0, 400);
+  const titles = orGroup(strList(p.titleSearch, 40), 6);
+  const keywords = orGroup(strList(p.descriptionSearch, 40), 4);
+  return [titles && `(${titles})`, keywords && `(${keywords})`]
+    .filter(Boolean).join(" ").slice(0, 400);
+}
+
+function buildGoogleInput(p = {}) {
+  const r = RATES.google;
+  const pages = googlePages(clampLimit(p.limit, r));
+  const input = {
+    query: googleQuery(p),
+    country: "us",
+    language: "en",
+    google_domain: "google.com",
+    num_results: pages * r.resultsPerPage,
+    max_pagination: pages,          // the page cap IS the cost cap on this actor
+    max_delay: 1,
+  };
+  /* one location, same as Indeed. A blank location is deliberate: with
+     country=us the actor searches the United States nationwide, which is what
+     the standard "United States" line means everywhere else in this app. */
+  const loc = (strList(p.locationSearch)[0] || "")
+    .replace(/,?\s*(united states|usa|us)\.?$/i, "").trim();
+  if (loc) input.location = loc;
+  return input;
+}
+
 /* ---------------- dedupe keys (jobs have no phones — URL is the identity)
    The query string is tracking noise on LinkedIn and gets dropped, but on
    Indeed it IS the posting: every URL is /viewjob?jk=<id>, so stripping it
@@ -282,8 +378,36 @@ function indeedHeadcount(v) {
   return m ? +m[1].replace(/,/g, "") : null;
 }
 
+/* Google Jobs is an aggregator: the posting itself lives on LinkedIn, Indeed,
+   a company's own careers page… apply_options carries those real links, and the
+   first is the one Google ranks highest. share_link (a google.com/search URL)
+   is the fallback — it still resolves to the posting, and jobs dedupe on URL,
+   so leaving it null would let one posting land again on every scrape. */
+function googleUrl(it) {
+  const opts = Array.isArray(it.apply_options) ? it.apply_options : [];
+  for (const o of opts) if (httpUrl(o?.link)) return httpUrl(o.link);
+  return httpUrl(it.share_link);
+}
+
 /* one lead-shaped record per raw actor item, whatever the board */
 function normalizeItem(key, it, stamp) {
+  if (key === "google") {
+    /* city/state stay NULL on purpose. The actor's `location` is the location
+       we SEARCHED, stamped onto every row — not the job's own: a "Tampa, FL"
+       search comes back with Paul Davis of North Dallas, ServiceMaster of
+       Euless TX and SERVPRO of Duncanville, all three labelled "Tampa, FL"
+       (Google Jobs targets location loosely, and the actor never carries a
+       per-item place). Writing that in would invent a city for every Google
+       lead — worse than the blank, and worse than the inferred states we
+       already apologise for. Blank is the honest answer. */
+    return {
+      title: it.title || "Job posting", org: clean(it.company_name),
+      contact: null, contactTitle: null, industry: null, employees: null,
+      city: null, state: null, url: googleUrl(it),
+      // "3 days ago" / "Just posted" — the same relative text Indeed sends
+      date: indeedPostedDate(it.detected_extensions?.posted_at, stamp) || stamp,
+    };
+  }
   if (key === "indeed") {
     const loc = (it.location && typeof it.location === "object") ? it.location : {};
     const emp = (it.employer && typeof it.employer === "object") ? it.employer : {};
@@ -438,13 +562,16 @@ async function resolveCompanies(items, stamp) {
 }
 
 async function lastRunCost(actor) {
-  const r = await apify(`/acts/${actor}/runs/last`);
+  const [r, tier] = await Promise.all([
+    apify(`/acts/${actor}/runs/last`),
+    accountTier(),
+  ]);
   const d = r?.data || {};
   const counts2 = d.chargedEventCounts || {};
   const prices = d.pricingInfo?.pricingPerEvent?.actorChargeEvents || {};
   let total = 0, priced = false;
   for (const [k, n] of Object.entries(counts2)) {
-    const p = eventUsd(prices[k]);
+    const p = eventPrice(prices[k], tier);
     if (typeof p === "number") { total += p * (+n || 0); priced = true; }
   }
   return {
@@ -458,25 +585,40 @@ router.post("/api/job-search", express.json({ limit: "64kb" }), async (req, res,
   try {
     const key = scraperKey(req.body?.scraper);
     const scraper = SCRAPERS[key];
+    /* One list for every board. Indeed is the only one that batches: it sends
+       one input per boolean query and they run concurrently (buildIndeedInputs);
+       LinkedIn and Google each describe a whole search in one input. */
     const inputs = key === "indeed"
-      ? buildIndeedInputs(req.body || {}) : [buildLinkedinInput(req.body || {})];
-    if (!inputs.length)
-      return res.status(400).json({ error: "Indeed needs a search query to run" });
-    /* refuse an over-long query rather than truncating it: a boolean cut
-       mid-quote still runs, still bills, and quietly searches for the wrong
-       thing — which is worse than being told to shorten it */
-    const tooLong = inputs.find((i) => (i.title || "").length > MAX_QUERY_CHARS);
-    if (tooLong)
-      return res.status(400).json({ error: `Indeed searches are capped at `
-        + `${MAX_QUERY_CHARS} characters — shorten “${tooLong.title.slice(0, 60)}…”` });
-    const limit = inputs[0].limit;
+      ? buildIndeedInputs(req.body || {})
+      : [(key === "google" ? buildGoogleInput : buildLinkedinInput)(req.body || {})];
+    if (key === "indeed") {
+      if (!inputs.length)
+        return res.status(400).json({ error: "Indeed needs a search query to run" });
+      /* refuse an over-long query rather than truncating it: a boolean cut
+         mid-quote still runs, still bills, and quietly searches for the wrong
+         thing — which is worse than being told to shorten it */
+      const tooLong = inputs.find((i) => (i.title || "").length > MAX_QUERY_CHARS);
+      if (tooLong)
+        return res.status(400).json({ error: `Indeed searches are capped at `
+          + `${MAX_QUERY_CHARS} characters — shorten “${tooLong.title.slice(0, 60)}…”` });
+    }
+    if (key === "google" && !inputs[0].query)
+      return res.status(400).json({ error: "Google Jobs needs a search query" });
+    const limit = key === "google" ? inputs[0].num_results : inputs[0].limit;
     const known = await existingJobKeys();
+    const rates = await actorRates(key).catch(() => RATES[key]);
 
-    /* one sync run per query, concurrently: a batch of three costs the wall
+    /* Google bills per page as it goes, so the page cap in the input is already
+       the cost cap; maxTotalChargeUsd is the belt to that pair of braces — if
+       the actor ever paginated past it, Apify stops the run instead of billing */
+    const chargeCap = key === "google"
+      ? `&maxTotalChargeUsd=${(googlePages(limit) * rates.pagePriceUsd + 0.01).toFixed(2)}`
+      : "";
+    /* one sync run per input, concurrently: a batch of three costs the wall
        clock of the slowest, not the sum. 280s keeps each run inside Apify's
        300s sync window, so a run that overruns still hands back what it got. */
     const runOne = (input) => apify(
-      `/acts/${scraper.actor}/run-sync-get-dataset-items?timeout=280&format=json&clean=true`
+      `/acts/${scraper.actor}/run-sync-get-dataset-items?timeout=280&format=json&clean=true${chargeCap}`
       + (scraper.memoryMbytes ? `&memory=${scraper.memoryMbytes}` : ""),
       { method: "POST", body: JSON.stringify(input) });
 
@@ -535,14 +677,16 @@ router.post("/api/job-search", express.json({ limit: "64kb" }), async (req, res,
 
     let cost = null;
     try {
-      const rates = await actorRates(key).catch(() => RATES[key]);
       const perJob = key === "linkedin" && inputs[0].recruiterOnly
         ? rates.recruiterPerResultUsd : rates.perResultUsd;
-      /* every batched query is its own run, so the start fee is paid per
-         query — and lastRunCost only ever sees one of them, which is why the
-         computed figure below is the one that wins the max() */
-      const computed = billable * perJob
-        + (rates.startUsd || 0) * inputs.length + 0.0001;
+      /* On Google the bill counts pages fetched, not rows returned: eight jobs
+         back is still one whole page paid for. Everywhere else it is per
+         dataset item, and every batched query is its own run — so the start fee
+         is paid once per query, and lastRunCost only ever sees one of those
+         runs, which is why the computed figure wins the max() below. */
+      const computed = key === "google"
+        ? googlePages(billable) * rates.pagePriceUsd + 0.00006
+        : billable * perJob + (rates.startUsd || 0) * inputs.length + 0.0001;
       const last = await lastRunCost(scraper.actor).catch(() => ({}));
       const known2 = [computed, last.usd, last.usageTotalUsd]
         .filter((v) => typeof v === "number");
@@ -559,7 +703,10 @@ router.post("/api/job-search", express.json({ limit: "64kb" }), async (req, res,
       input: key === "indeed"
         ? { limit, queries: inputs.length, datePosted: inputs[0].datePosted ?? "",
             country: inputs[0].country, location: inputs[0].location ?? null }
-        : { limit, timeRange: inputs[0].timeRange },
+        : key === "google"
+          ? { limit, query: inputs[0].query, location: inputs[0].location ?? null,
+              pages: googlePages(limit) }
+          : { limit, timeRange: inputs[0].timeRange },
       queriesFailed: failed.length,
       found: found.length, inserted, duplicates,
       companies: { inserted: companies.inserted, updated: companies.updated },
@@ -570,11 +717,12 @@ router.post("/api/job-search", express.json({ limit: "64kb" }), async (req, res,
 
 router.get("/api/apify-usage", async (req, res, next) => {
   try {
-    const [limits, monthly, linkedinRates, indeedRates] = await Promise.all([
+    const [limits, monthly, linkedinRates, indeedRates, googleRates] = await Promise.all([
       apify("/users/me/limits"),
       apify("/users/me/usage/monthly"),
       actorRates("linkedin").catch(() => RATES.linkedin),
       actorRates("indeed").catch(() => RATES.indeed),
+      actorRates("google").catch(() => RATES.google),
     ]);
     const L = limits?.data || limits || {};
     const M = monthly?.data || monthly || {};
@@ -592,12 +740,17 @@ router.get("/api/apify-usage", async (req, res, next) => {
       cycleEndsAt: cycle.endAt || null,
       daily,
       rates: linkedinRates,       // legacy shape — pre-scraper clients read this
-      scraperRates: { linkedin: linkedinRates, indeed: indeedRates },
+      scraperRates: {
+        linkedin: linkedinRates, indeed: indeedRates, google: googleRates,
+      },
     });
   } catch (e) { next(e); }
 });
 
 // everything past `router` is exported for tests only
 module.exports = {
-  router, resolveCompanies, buildIndeedInputs, normalizeItem, urlKey,
+  router, resolveCompanies,
+  buildIndeedInputs, normalizeItem, urlKey,
+  _test: { buildGoogleInput, googleQuery, googlePages, googleUrl, normalizeItem,
+    buildIndeedInputs, urlKey, actorRates, accountTier },
 };

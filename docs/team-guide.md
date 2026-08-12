@@ -2,10 +2,10 @@ Karma Leads
 ===========
 
 **Every lead we've collected — Apollo exports, Bitrix CRM dumps, vendor lists, the
-master restoration database and LinkedIn job postings — in one dashboard the team
+master restoration database and live job postings — in one dashboard the team
 can actually work.** Mark leads contacted, leave notes, favourite them, ban numbers
-we're not allowed to call, drop in new spreadsheets, and pull fresh LinkedIn job
-leads on demand.
+we're not allowed to call, drop in new spreadsheets, and pull fresh job leads on
+demand from LinkedIn, Indeed or Google Jobs.
 
 A custom dashboard and API over **PostgreSQL** (since the 2026-08-11
 re-architecture), with [NocoDB](https://nocodb.com) as an admins-only grid on
@@ -58,7 +58,7 @@ What's in it
 |---|---:|---|
 | **Companies** | 32,888 | Companies to call — Bitrix CRM, vendor lists, master restoration DB, adjuster lists |
 | **People** | 2,305 | Named individuals — Apollo exports, CRM rows with a contact name |
-| **Job board** | 144 | LinkedIn postings, with the hiring contact where we have one |
+| **Job board** | 144 | Live postings from LinkedIn, Indeed and Google Jobs, with the hiring contact where we have one |
 | *Segments* | 221 | Category × State groups behind "Similar companies" (computed, not a table you maintain) |
 | *Blocklist* | 531 | Numbers we are banned from calling |
 
@@ -155,10 +155,19 @@ window. There's no manual add-a-lead form — leads arrive from a file or a job 
 The result panel reports what landed where and what was skipped. A few thousand rows
 takes a few seconds — don't close the window while it runs.
 
-### 🔎 Find jobs — live LinkedIn postings (admins)
+### 🔎 Find jobs — live postings from three boards (admins)
 
 **🔎 Find jobs** searches live postings and drops results into the Job board.
-**⚙** beside it opens the settings. It comes pre-loaded with our standard search:
+**⚙** beside it opens the settings, where you also pick **which board to search**.
+The chip on the 🔎 button always names the one you're armed with.
+
+| Board | What you get | Price |
+|---|---|---:|
+| **LinkedIn** | The full filter set, a hiring contact where there is one, and the employer itself as a company lead | $5.00 / 1,000 jobs |
+| **Indeed** | One job title in one location, jobs only | $3.00 / 1,000 jobs |
+| **Google Jobs** | One query line across every board Google indexes — LinkedIn, Indeed, ZipRecruiter, company career pages | $0.11 a page of 10 |
+
+All three come pre-loaded with our standard search:
 
 > Back-office roles — office admin, estimator, bookkeeper, marketing coordinator and
 > a dozen more — at restoration companies with **200 employees or fewer**, anywhere
@@ -167,18 +176,34 @@ takes a few seconds — don't close the window while it runs.
 _The reasoning: a small restoration firm hiring an office administrator is a firm
 with money to spend and no back office to spend it on. That's our pitch._
 
-**This one costs money.** Billed per job returned at **$5.00 per 1,000** — 50 jobs is
-about 25¢. The settings panel shows a running maximum as you type, the confirm screen
-repeats it with your remaining credits, and **nothing is spent until you press the
-button**. A search that matches nothing costs nothing. Turning on **recruiter
-contacts** triples the rate to $15/1,000, in return for a named person to call.
+**This one costs money.** The settings panel shows a running maximum as you type, the
+confirm screen repeats it with your remaining credits, and **nothing is spent until
+you press the button**. On LinkedIn and Indeed you pay per job returned, so a search
+that matches nothing costs nothing; turning on **recruiter contacts** triples the
+LinkedIn rate to $15/1,000, in return for a named person to call.
 
-In **⚙** you can change job titles, description keywords, locations (one per line as
-`City, State, Country`), the posting window, max results, and a set of advanced
-filters. Settings save to your own browser; **Reset** restores the standard search.
+**Google is priced differently — by the page.** Ten jobs a page, $0.11 a page whether
+it comes back full or with two rows on it, so 100 jobs is about $1.10. Google also
+takes **one query line** instead of a title list, and has no company-size or
+posted-within filter. Its default query is the same search as above, compressed:
+
+> `("Office Manager" OR "Office Administrator" OR "Administrative Assistant" OR
+> "Bookkeeper" OR "Estimator" OR "Accounts Receivable") (restoration OR "water
+> damage" OR "mold remediation")`
+
+> **Google postings arrive with no city or state, on purpose.** Google reports the
+> area you *searched*, not the job's — a Tampa search comes back with Dallas
+> companies all stamped "Tampa, FL". Rather than invent a location for every lead,
+> the app leaves both blank. Use it for reach; use LinkedIn when you need the place.
+
+In **⚙** you can change job titles (or the Google query), locations (one per line as
+`City, State, Country` — Indeed and Google use only the first), the posting window,
+max results, and a set of advanced filters. Settings save to your own browser;
+**Reset** restores the standard search.
 
 > **Not finding anything?** Usually over-narrow settings. Widen **Posted within**
-> first, then drop a location or a title.
+> first, then drop a location or a title. On Google, shorten the query — long ones
+> make it vaguer, not sharper.
 
 ---
 
