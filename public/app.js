@@ -1294,16 +1294,19 @@ async function renderUsersList() {
    with a hard max-cost figure); the ⚙ gear edits them. Settings live in
    localStorage — they're personal defaults, not shared state. The Apify
    token never reaches the browser: everything goes through the domain API.
-   Two job boards, picked in settings: LinkedIn (the fantastic-jobs actor,
-   full filter set) and Indeed (misceres/indeed-scraper — one title + one
-   location per search, no filters, but a lower per-job price). */
+   Three job boards, picked in settings: LinkedIn (the fantastic-jobs actor,
+   full filter set), Indeed (misceres/indeed-scraper — one title + one location
+   per search, no filters, but a lower per-job price) and Google Jobs
+   (johnvc/google-jobs-scraper — one query line across every board Google
+   indexes, priced per page of ten). */
 const JS_LS = "kl_jobsearch";
 
-/* The two boards are not interchangeable — one costs more and returns company
-   records, the other is one-title-one-location and jobs only — so the picker is
-   a pair of full-width brand cards, not a radio pair, and the chosen board is
-   named on the 🔎 button and in the confirm step. Brand marks are drawn (the
-   nav has no emoji anywhere else either). */
+/* The three boards are not interchangeable — one costs more and returns company
+   records, one is one-title-one-location and jobs only, one is priced by the
+   page and comes back without locations — so the picker is a row of brand
+   cards, not a radio triplet, and the chosen board is named on the 🔎 button
+   and in the confirm step. Brand marks are drawn (the nav has no emoji anywhere
+   else either). */
 const JS_MARK = {
   linkedin: `<svg class="board-mark" viewBox="0 0 24 24" aria-hidden="true">
     <rect width="24" height="24" rx="4" fill="#0a66c2"/>
@@ -1314,16 +1317,30 @@ const JS_MARK = {
     <circle cx="12" cy="6.6" r="2.2" fill="#fff"/>
     <path fill="#fff" d="M9.85 10.1h4.3v7.1c0 1.5.5 1.9 1.35 1.9v2.1c-3.7.35-5.65-.85-5.65-4.1v-7z"/>
   </svg>`,
+  google: `<svg class="board-mark" viewBox="0 0 24 24" aria-hidden="true">
+    <rect width="24" height="24" rx="4" fill="#fff" stroke="#dadce0"/>
+    <path fill="#4285f4" d="M19.1 12.18c0-.5-.05-.99-.13-1.45H12v2.74h3.98a3.4 3.4 0 01-1.48 2.23v1.85h2.39c1.4-1.29 2.21-3.19 2.21-5.37z"/>
+    <path fill="#34a853" d="M12 19.5c2 0 3.68-.66 4.9-1.8l-2.4-1.85c-.66.45-1.51.71-2.5.71-1.92 0-3.55-1.3-4.13-3.04H5.4v1.9A7.4 7.4 0 0012 19.5z"/>
+    <path fill="#fbbc05" d="M7.87 13.52a4.44 4.44 0 010-2.84v-1.9H5.4a7.4 7.4 0 000 6.64l2.47-1.9z"/>
+    <path fill="#ea4335" d="M12 8.06c1.08 0 2.05.37 2.82 1.1l2.11-2.11A7.4 7.4 0 005.4 8.78l2.47 1.9C8.45 8.94 10.08 8.06 12 8.06z"/>
+  </svg>`,
 };
+/* `label` is the board's real name; `short` is what fits on a card in a
+   three-up row and on the sidebar button's chip */
 const JS_BOARDS = [
   { key: "linkedin", label: "LinkedIn", tag: "Richest data" },
-  { key: "indeed", label: "Indeed", tag: "Cheapest per job" },
+  { key: "indeed", label: "Indeed", tag: "Cheapest" },
+  { key: "google", label: "Google Jobs", short: "Google", tag: "Widest net" },
 ];
 const JS_SCRAPERS = JS_BOARDS.map((b) => [b.key, b.label]);
+const JS_KEYS = JS_BOARDS.map((b) => b.key);
 const JS_RATES_FALLBACK = {
   linkedin: { perResultUsd: 0.005, recruiterPerResultUsd: 0.015,
     limitMin: 10, limitMax: 500, limitDefault: 100 },
   indeed: { perResultUsd: 0.003, limitMin: 10, limitMax: 500, limitDefault: 100 },
+  // Google is billed per page of ~10 jobs, not per job — see jsMaxCost
+  google: { perResultUsd: 0.011, pagePriceUsd: 0.11, resultsPerPage: 10,
+    limitMin: 10, limitMax: 500, limitDefault: 100 },
 };
 const JS_TIME_RANGES = [["1h", "Last hour"], ["24h", "Last 24 hours"],
   ["7d", "Last 7 days"], ["6m", "All active jobs"]];
@@ -1353,6 +1370,17 @@ const JS_DEFAULTS = {
     "mold remediation", "mitigation", "Xactimate", "Symbility", "IICRC",
     "disaster recovery", "storm damage"].join(", "),
   maxEmployees: 200,
+  /* The Google twin of the search above, aimed at the same result set. Google
+     Jobs takes one query line — no title list, no keyword list, no company-size
+     or posted-within filter — so the eighteen titles and ten keywords compress
+     to the ones that carry the search: quoted phrases OR'd inside a group, the
+     two groups ANDed by sitting side by side. Verified live: it returns
+     restoration office managers, estimators and admin assistants, which is
+     exactly what the LinkedIn defaults return. Longer lines make Google vaguer,
+     and vaguer costs the same $0.11 a page. */
+  googleQuery: '("Office Manager" OR "Office Administrator" OR '
+    + '"Administrative Assistant" OR "Bookkeeper" OR "Estimator" OR '
+    + '"Accounts Receivable") (restoration OR "water damage" OR "mold remediation")',
 };
 
 let APIFY_USAGE = null;          // {usedUsd,maxUsd,remainingUsd,cycleEndsAt,daily,rates}
@@ -1362,9 +1390,25 @@ const jsRates = (scraper = "linkedin") =>
     || JS_RATES_FALLBACK.linkedin;
 const jsBoard = (s) =>
   (JS_SCRAPERS.find(([v]) => v === s.scraper) || JS_SCRAPERS[0])[1];
-/* results are billed per job actually returned, so limit × rate is a ceiling */
+/* the name as it reads in front of the word "jobs" — "Google Jobs jobs?" is
+   the sentence you get from the full label */
+const jsBoardShort = (s) => {
+  const b = JS_BOARDS.find((x) => x.key === s.scraper) || JS_BOARDS[0];
+  return b.short || b.label;
+};
+/* Google charges by the page of ~10 jobs however full the page comes back, so
+   its ceiling counts whole pages; the other two bill per job actually returned,
+   which makes limit × rate the ceiling there. */
+const jsPerPage = () => jsRates("google").resultsPerPage || 10;
+const jsPagePrice = () => {
+  const r = jsRates("google");
+  return r.pagePriceUsd ?? r.perResultUsd * jsPerPage();
+};
+const jsPages = (limit) =>
+  Math.max(1, Math.ceil((+limit || jsRates("google").limitDefault) / jsPerPage()));
 const jsMaxCost = (s) => {
   const r = jsRates(s.scraper);
+  if (s.scraper === "google") return jsPages(s.limit) * jsPagePrice();
   return (+s.limit || r.limitDefault) *
     (s.scraper === "linkedin" && s.recruiterOnly
       ? r.recruiterPerResultUsd : r.perResultUsd);
@@ -1379,7 +1423,8 @@ function jsSettings() {
   try { s = JSON.parse(localStorage.getItem(JS_LS)) || {}; } catch (e) { /* fresh */ }
   // ?? not || — a deliberately emptied-and-saved field must stay empty
   return {
-    scraper: s.scraper === "indeed" ? "indeed" : "linkedin",
+    scraper: JS_KEYS.includes(s.scraper) ? s.scraper : "linkedin",
+    googleQuery: s.googleQuery ?? JS_DEFAULTS.googleQuery,
     titles: s.titles ?? JS_DEFAULTS.titles,
     locations: s.locations ?? JS_DEFAULTS.locations,
     timeRange: s.timeRange || JS_DEFAULTS.timeRange,
@@ -1403,7 +1448,7 @@ function paintBoardTag() {
   const el = $("js-board-tag");
   if (!el) return;
   const s = jsSettings();
-  el.textContent = jsBoard(s);
+  el.textContent = jsBoardShort(s);         // the button is narrow — short name
   el.className = "js-board-tag board-chip board-chip-" + s.scraper;
 }
 
@@ -1463,28 +1508,37 @@ function openJobSearchSettings() {
   document.querySelector(".modal").classList.add("wide");
   $("modal-body").innerHTML = `
     ${usageCard()}
-    <form id="js-form"${s.scraper === "indeed" ? ' class="indeed"' : ""}>
+    <form id="js-form" class="js-${s.scraper}">
       <div class="js-group-label">Job Board Settings</div>
       <div class="board-picker">${JS_BOARDS.map((b) => `
         <label class="board-card board-${b.key}${b.key === s.scraper ? " on" : ""}">
           <input type="radio" name="js-scraper" value="${b.key}"
                  ${b.key === s.scraper ? " checked" : ""}>
+          <span class="board-tick" aria-hidden="true">✓</span>
           <span class="board-head">
             ${JS_MARK[b.key]}
-            <span class="board-name">${b.label}</span>
-            <span class="board-tick" aria-hidden="true">✓</span>
+            <span class="board-name">${b.short || b.label}</span>
           </span>
           <span class="board-price">${usd(jsRates(b.key).perResultUsd * 1000)}
-            <small>per 1,000 jobs</small></span>
+            <small>per 1,000${b.key === "google" ? " · by the page" : " jobs"}</small></span>
           <span class="board-tag">${b.tag}</span>
         </label>`).join("")}</div>
-      <label>Job titles — comma-separated, blank = any
+      <label class="g-only">Google search query — one line, quoted phrases and OR
+        <textarea id="js-query" rows="3"
+          placeholder="(&quot;Office Manager&quot; OR &quot;Estimator&quot;) (restoration OR &quot;water damage&quot;)"
+          >${esc(s.googleQuery)}</textarea>
+        <span class="js-hint">Google takes one query, not a title list — the two
+          groups above are ANDed. It has no company-size or posted-within filter.</span>
+      </label>
+      <label class="no-g">Job titles — comma-separated, blank = any
         <input id="js-titles" value="${esc(s.titles)}"
                placeholder="Insurance Adjuster, Claims Adjuster">
       </label>
       <label>Locations — one per line, written as “City, State, Country”
         <textarea id="js-locations" rows="2"
           placeholder="Miami, Florida, United States">${esc(s.locations)}</textarea>
+        <span class="js-hint g-only">Only the first line is used, and Google
+          targets it loosely — leave it as “United States” to search nationwide.</span>
       </label>
       <div class="js-two">
         <label class="li-only">Posted within
@@ -1536,40 +1590,53 @@ function openJobSearchSettings() {
     </form>`;
   $("modal-backdrop").classList.remove("hidden");
 
-  const collect = () => ({
-    scraper: (document.querySelector('#js-form [name="js-scraper"]:checked')
-      || {}).value === "indeed" ? "indeed" : "linkedin",
-    titles: $("js-titles").value.trim(),
-    locations: $("js-locations").value.trim(),
-    timeRange: $("js-time").value,
-    limit: Math.min(Math.max(+$("js-limit").value || jsRates().limitDefault,
-      jsRates().limitMin), jsRates().limitMax),
-    arrangement: [...document.querySelectorAll('#js-form [data-g="arr"]:checked')].map((i) => i.value),
-    employment: [...document.querySelectorAll('#js-form [data-g="emp"]:checked')].map((i) => i.value),
-    seniority: [...document.querySelectorAll('#js-form [data-g="sen"]:checked')].map((i) => i.value),
-    hasSalary: $("js-salary").checked,
-    removeAgency: $("js-agency").checked,
-    recruiterOnly: $("js-recruiter").checked,
-    description: $("js-desc").value.trim(),
-    maxEmployees: +$("js-maxemp").value || null,
-    saved: true,
-  });
+  const collect = () => {
+    const picked = (document.querySelector('#js-form [name="js-scraper"]:checked')
+      || {}).value;
+    const scraper = JS_KEYS.includes(picked) ? picked : "linkedin";
+    let limit = Math.min(Math.max(+$("js-limit").value || jsRates().limitDefault,
+      jsRates().limitMin), jsRates().limitMax);
+    // Google sells whole pages of ten: asking for 55 pays for 60 either way
+    if (scraper === "google") limit = jsPages(limit) * jsPerPage();
+    return {
+      scraper,
+      googleQuery: $("js-query").value.trim(),
+      titles: $("js-titles").value.trim(),
+      locations: $("js-locations").value.trim(),
+      timeRange: $("js-time").value,
+      limit,
+      arrangement: [...document.querySelectorAll('#js-form [data-g="arr"]:checked')].map((i) => i.value),
+      employment: [...document.querySelectorAll('#js-form [data-g="emp"]:checked')].map((i) => i.value),
+      seniority: [...document.querySelectorAll('#js-form [data-g="sen"]:checked')].map((i) => i.value),
+      hasSalary: $("js-salary").checked,
+      removeAgency: $("js-agency").checked,
+      recruiterOnly: $("js-recruiter").checked,
+      description: $("js-desc").value.trim(),
+      maxEmployees: +$("js-maxemp").value || null,
+      saved: true,
+    };
+  };
   const estimate = () => {
     const c = collect();
-    // the picker doubles as a mode switch: Indeed hides the LinkedIn-only rows
-    $("js-form").classList.toggle("indeed", c.scraper === "indeed");
+    // the picker doubles as a mode switch: each board hides what it can't use
+    $("js-form").className = "js-" + c.scraper;
     document.querySelectorAll("#js-form .board-card").forEach((el) =>
       el.classList.toggle("on", el.classList.contains("board-" + c.scraper)));
     const recruiter = c.scraper === "linkedin" && c.recruiterOnly;
     const rate = recruiter
       ? jsRates(c.scraper).recruiterPerResultUsd : jsRates(c.scraper).perResultUsd;
     const per1k = "$" + (rate * 1000).toFixed(2) + " per 1,000";
-    $("js-estimate").innerHTML = `Maximum cost on
-      <span class="board-chip board-chip-${c.scraper}">${jsBoard(c)}</span>:
-      <strong>${usd(jsMaxCost(c))}</strong>
-      for up to ${c.limit} jobs${recruiter
+    /* on Google the sentence has to change, not just the number: whole pages
+       are bought up front, so this figure is what the search costs, not a cap */
+    const tail = c.scraper === "google"
+      ? ` for ${jsPages(c.limit)} page${jsPages(c.limit) === 1 ? "" : "s"} of
+         up to ${c.limit} jobs · ${usd(jsPagePrice())} a page, full or not`
+      : ` for up to ${c.limit} jobs${recruiter
         ? ` <span class="js-price-warn">recruiter rate — ${per1k}</span>`
         : ` · ${per1k}`}`;
+    $("js-estimate").innerHTML = `Maximum cost on
+      <span class="board-chip board-chip-${c.scraper}">${jsBoard(c)}</span>:
+      <strong>${usd(jsMaxCost(c))}</strong>${tail}`;
   };
   estimate();
   $("js-form").addEventListener("input", estimate);
@@ -1600,13 +1667,19 @@ function openJobSearchConfirm() {
   const s = jsSettings();
   if (!s.saved) { openJobSearchSettings(); return; }
   const indeed = s.scraper === "indeed";
-  // Indeed runs one search — confirm exactly what will be sent, not the list
-  const titles = indeed
-    ? splitCommas(s.titles).slice(0, 1) : splitCommas(s.titles);
-  const locations = indeed
+  const google = s.scraper === "google";
+  const one = indeed || google;     // both run ONE search, not a list of them
+  // confirm exactly what will be sent, not the settings the board will ignore
+  const titles = one ? splitCommas(s.titles).slice(0, 1) : splitCommas(s.titles);
+  const locations = one
     ? splitLines(s.locations).slice(0, 1) : splitLines(s.locations);
   if (indeed && !titles.length) {   // the server 400s on a blank position
     toast("Indeed needs a job title — add one in settings");
+    openJobSearchSettings();
+    return;
+  }
+  if (google && !s.googleQuery) {   // …and on a blank query
+    toast("Google Jobs needs a search query — add one in settings");
     openJobSearchSettings();
     return;
   }
@@ -1618,30 +1691,44 @@ function openJobSearchConfirm() {
     ? `${arr.slice(0, n).join(", ")} +${arr.length - n} more` : arr.join(", ");
   const row = (label, val) => val
     ? `<div class="ir-row"><span>${label}</span><strong>${esc(val)}</strong></div>` : "";
-  $("modal-title").textContent = `Search ${jsBoard(s)} jobs?`;
+  // the Google query is a line of syntax, not a value — it gets the full width
+  const queryRow = (val) => val
+    ? `<div class="ir-row ir-wrap"><span>${"Search query"}</span>
+       <strong class="ir-code">${esc(val)}</strong></div>` : "";
+  $("modal-title").textContent = `Search ${jsBoardShort(s)} jobs?`;
   $("modal-body").innerHTML = `
     <div class="board-banner board-${s.scraper}">
       ${JS_MARK[s.scraper]}
       <div>
         <div class="board-banner-name">${jsBoard(s)}</div>
-        <div class="board-banner-sub">${indeed
-          ? "One title, one location, jobs only — no company records"
-          : "Full filters — organizations also land as company leads"}</div>
+        <div class="board-banner-sub">${{
+          indeed: "One title, one location, jobs only — no company records",
+          google: "Every board Google indexes — jobs only, and without locations",
+        }[s.scraper] || "Full filters — organizations also land as company leads"}</div>
       </div>
-      <button type="button" class="board-swap" id="js-swap">Use ${indeed
-        ? "LinkedIn" : "Indeed"} instead</button>
+      <div class="board-swaps">${JS_BOARDS.filter((b) => b.key !== s.scraper)
+        .map((b) => `<button type="button" class="board-swap" data-board="${b.key}"
+          >Use ${b.short || b.label}</button>`).join("")}</div>
     </div>
     <div class="import-report">
-      ${row("Job titles", brief(titles, 3) || "Any")}
+      ${google ? queryRow(s.googleQuery) : ""}
+      ${google ? "" : row("Job titles", brief(titles, 3) || "Any")}
       ${row("Locations", brief(locations, 2) || "Anywhere")}
-      ${indeed ? "" : row("Company keywords", brief(keywords, 3))}
-      ${indeed ? "" : row("Posted within", timeLabel)}
-      ${!indeed && s.maxEmployees ? row("Company size", `≤ ${s.maxEmployees} employees`) : ""}
-      ${row("Max results", String(s.limit))}
-      ${!indeed && s.recruiterOnly ? row("Recruiter contacts", "On — higher rate") : ""}
+      ${one ? "" : row("Company keywords", brief(keywords, 3))}
+      ${one ? "" : row("Posted within", timeLabel)}
+      ${!one && s.maxEmployees ? row("Company size", `≤ ${s.maxEmployees} employees`) : ""}
+      ${row("Max results", google
+        ? `${s.limit} — ${jsPages(s.limit)} page${jsPages(s.limit) === 1 ? "" : "s"} of 10`
+        : String(s.limit))}
+      ${!one && s.recruiterOnly ? row("Recruiter contacts", "On — higher rate") : ""}
     </div>
-    <p class="modal-note">Costs at most <strong>${usd(max)}</strong> — you only pay
-      for jobs actually returned.${APIFY_USAGE?.remainingUsd != null
+    <p class="modal-note">${google
+      ? `Costs <strong>${usd(max)}</strong> — Google sells whole pages of ten, so a
+         page that comes back half full still costs ${usd(jsPagePrice())}. Postings
+         arrive with no city or state: Google reports the area you searched, not
+         the job's, so this app stores neither.`
+      : `Costs at most <strong>${usd(max)}</strong> — you only pay for jobs actually
+         returned.`}${APIFY_USAGE?.remainingUsd != null
         ? ` You have <strong>${usd(APIFY_USAGE.remainingUsd)}</strong> in Apify credits.` : ""}</p>
     <div class="modal-actions">
       <button type="button" class="btn-secondary" id="js-edit">⚙ Edit</button>
@@ -1652,12 +1739,13 @@ function openJobSearchConfirm() {
   $("modal-cancel").addEventListener("click", closeModal);
   $("js-edit").addEventListener("click", openJobSearchSettings);
   // one click to flip boards from the confirm step — the settings are otherwise
-  // identical, and Indeed simply ignores what it can't use
-  $("js-swap").addEventListener("click", () => {
-    saveJsSettings({ ...s, scraper: indeed ? "linkedin" : "indeed" });
-    paintBoardTag();
-    openJobSearchConfirm();
-  });
+  // identical, and a board simply ignores what it can't use
+  document.querySelectorAll("#modal-body .board-swap").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      saveJsSettings({ ...s, scraper: btn.dataset.board });
+      paintBoardTag();
+      openJobSearchConfirm();
+    }));
   $("js-go").addEventListener("click", runJobSearch);
 }
 
@@ -1667,7 +1755,7 @@ async function runJobSearch() {
   $("modal-body").innerHTML = `
     <div class="import-busy">
       <div class="spinner"></div>
-      <div><strong>Searching ${jsBoard(s)} jobs…</strong></div>
+      <div><strong>Searching ${jsBoardShort(s)} jobs…</strong></div>
       <div class="dz-sub">Usually 10–60 seconds. New jobs land in the Job board tab.</div>
     </div>`;
   $("modal-backdrop").classList.remove("hidden");
@@ -1676,6 +1764,7 @@ async function runJobSearch() {
       method: "POST",
       body: JSON.stringify({
         scraper: s.scraper,
+        query: s.googleQuery,          // Google only; the others ignore it
         titleSearch: splitCommas(s.titles),
         locationSearch: splitLines(s.locations),
         timeRange: s.timeRange,
@@ -1732,6 +1821,9 @@ function renderJobSearchResult(o) {
       ${line("Companies enriched (logo, website…)", o.companies?.updated)}
       <div class="ir-row"><span>Actual cost charged</span><strong>${cost}</strong></div>
     </div>
+    ${o.scraper === "google" && o.inserted
+      ? `<p class="modal-note">Google postings land without a city or state —
+         Google reports the area searched, not the job's.</p>` : ""}
     <div class="modal-actions">
       <button type="button" class="btn-secondary" id="js-again">Search again</button>
       <button type="button" class="btn-primary" id="modal-cancel">Done</button>
@@ -2063,7 +2155,8 @@ function feedLine(f) {
       m.count ?? "?"} lead${m.count === 1 ? "" : "s"} destroyed)</span>`;
     case "import": return `imported <b>${esc(f.to_value || "a file")}</b>` +
       (m.inserted ? ` <span class="feed-what">(${JSON.stringify(m.inserted).replace(/[{}"]/g, "")})</span>` : "");
-    case "jobsearch": return `ran a${m.scraper === "indeed" ? "n Indeed" : " LinkedIn"} job search <span class="feed-what">(${m.found ?? "?"} found, ${m.inserted ?? "?"} new${
+    case "jobsearch": return `ran a${{ indeed: "n Indeed", google: " Google Jobs" }[m.scraper]
+      || " LinkedIn"} job search <span class="feed-what">(${m.found ?? "?"} found, ${m.inserted ?? "?"} new${
       m.companies ? `, ${m.companies} compan${m.companies === 1 ? "y" : "ies"}` : ""})</span>`;
     default: return esc(f.action);
   }
