@@ -1424,8 +1424,10 @@ async function renderUsersList() {
    localStorage — they're personal defaults, not shared state. The Apify
    token never reaches the browser: everything goes through the domain API.
    Two job boards, picked in settings: LinkedIn (the fantastic-jobs actor,
-   full filter set) and Indeed (misceres/indeed-scraper — one title + one
-   location per search, no filters, but a lower per-job price). */
+   full filter set) and Indeed (valig/indeed-jobs-scraper — one boolean query
+   per run, run in batches, at a twentieth of LinkedIn's per-job price).
+   The two boards take different inputs, so the settings form is really two
+   forms wearing one skin: `.li-only` / `.in-only` rows swap on the picker. */
 const JS_LS = "kl_jobsearch";
 
 /* The two boards are not interchangeable — one costs more and returns company
@@ -1450,12 +1452,36 @@ const JS_BOARDS = [
 ];
 const JS_SCRAPERS = JS_BOARDS.map((b) => [b.key, b.label]);
 const JS_RATES_FALLBACK = {
-  linkedin: { perResultUsd: 0.005, recruiterPerResultUsd: 0.015,
+  linkedin: { perResultUsd: 0.005, recruiterPerResultUsd: 0.015, startUsd: 0,
     limitMin: 10, limitMax: 500, limitDefault: 100 },
-  indeed: { perResultUsd: 0.003, limitMin: 10, limitMax: 500, limitDefault: 100 },
+  indeed: { perResultUsd: 0.0001, startUsd: 0.001,
+    limitMin: 10, limitMax: 1000, limitDefault: 250 },
 };
 const JS_TIME_RANGES = [["1h", "Last hour"], ["24h", "Last 24 hours"],
   ["7d", "Last 7 days"], ["6m", "All active jobs"]];
+/* Indeed's own date filter — days, as the actor's schema spells them */
+const JS_DATE_POSTED = [["1", "Last 24 hours"], ["3", "Last 3 days"],
+  ["7", "Last 7 days"], ["14", "Last 14 days"], ["", "Any time"]];
+const JS_MAX_QUERIES = 5;            // must match MAX_QUERIES in jobsearch.js
+/* the actor's country enum; anything else is rejected at the actor */
+const JS_COUNTRIES = [["us", "United States"], ["ca", "Canada"],
+  ["uk", "United Kingdom"], ["ie", "Ireland"], ["au", "Australia"],
+  ["nz", "New Zealand"], ["ar", "Argentina"], ["at", "Austria"],
+  ["bh", "Bahrain"], ["be", "Belgium"], ["br", "Brazil"], ["cl", "Chile"],
+  ["cn", "China"], ["co", "Colombia"], ["cr", "Costa Rica"],
+  ["cz", "Czech Republic"], ["dk", "Denmark"], ["ec", "Ecuador"],
+  ["eg", "Egypt"], ["fi", "Finland"], ["fr", "France"], ["de", "Germany"],
+  ["gr", "Greece"], ["hk", "Hong Kong"], ["hu", "Hungary"], ["in", "India"],
+  ["id", "Indonesia"], ["il", "Israel"], ["it", "Italy"], ["jp", "Japan"],
+  ["kw", "Kuwait"], ["lu", "Luxembourg"], ["my", "Malaysia"], ["mx", "Mexico"],
+  ["ma", "Morocco"], ["nl", "Netherlands"], ["ng", "Nigeria"], ["no", "Norway"],
+  ["om", "Oman"], ["pk", "Pakistan"], ["pa", "Panama"], ["pe", "Peru"],
+  ["ph", "Philippines"], ["pl", "Poland"], ["pt", "Portugal"], ["qa", "Qatar"],
+  ["ro", "Romania"], ["sa", "Saudi Arabia"], ["sg", "Singapore"],
+  ["za", "South Africa"], ["kr", "South Korea"], ["es", "Spain"],
+  ["se", "Sweden"], ["ch", "Switzerland"], ["tw", "Taiwan"], ["th", "Thailand"],
+  ["tr", "Turkey"], ["ua", "Ukraine"], ["ae", "United Arab Emirates"],
+  ["uy", "Uruguay"], ["ve", "Venezuela"], ["vn", "Vietnam"]];
 const JS_ARRANGEMENTS = ["On-site", "Hybrid", "Remote OK", "Remote Solely"];
 const JS_EMPLOYMENT = [["FULL_TIME", "Full-time"], ["PART_TIME", "Part-time"],
   ["CONTRACTOR", "Contract"], ["TEMPORARY", "Temporary"], ["INTERN", "Internship"]];
@@ -1466,17 +1492,47 @@ const JS_SENIORITY = ["Internship", "Entry level", "Associate",
    a fill-in operation: back-office roles at small (≤200-person) restoration
    companies anywhere in the US. Clearing a field and saving still means
    "blank on purpose" — defaults only apply where nothing was ever saved. */
-const JS_DEFAULTS = {
-  titles: ["Office Administrator", "Office Admin", "Administrative Assistant",
-    "Office Manager", "Estimator", "Bookkeeper", "Bookkeeping",
-    "Accounting Clerk", "Accounts Receivable", "Digital Marketer",
-    "Marketing Coordinator", "Sales Representative",
+/* "Medical Biller" is deliberately absent: it never co-occurs with restoration
+   work. The insurance-billing role a restoration company actually posts is a
+   Billing Specialist, Claims Coordinator or Insurance Coordinator. */
+const JS_TITLES = ["Office Administrator", "Office Admin",
+  "Administrative Assistant", "Office Manager", "Estimator", "Bookkeeper",
+  "Bookkeeping", "Accounting Clerk", "Accounts Receivable",
+  "Billing Specialist", "Claims Coordinator", "Insurance Coordinator",
+  "Digital Marketer", "Marketing Coordinator", "Sales Representative",
+  "Business Development Representative", "Customer Success",
+  "Customer Service Representative", "Account Manager"];
+
+/* Indeed takes one query per run, and the query goes straight to Indeed's
+   search box — so boolean works and the whole title list is three runs, not
+   nineteen. Grouped by function rather than crammed into one string: one
+   19-title query over-filters and risks truncation. The industry clause is
+   identical in all three, because that clause is the actual ICP; the same
+   posting surfacing in two runs is expected and deduped on the job URL. */
+const JS_RESTORATION = '(restoration OR "water damage" OR "mold remediation"'
+  + ' OR "fire damage" OR mitigation)';
+const JS_QUERY_GROUPS = [
+  ["Office Administrator", "Office Admin", "Administrative Assistant",
+    "Office Manager"],
+  ["Estimator", "Bookkeeper", "Bookkeeping", "Accounting Clerk",
+    "Accounts Receivable", "Billing Specialist", "Claims Coordinator",
+    "Insurance Coordinator"],
+  ["Digital Marketer", "Marketing Coordinator", "Sales Representative",
     "Business Development Representative", "Customer Success",
-    "Customer Service Representative", "Account Manager", "Medical Biller",
-    "Billing Specialist"].join(", "),
+    "Customer Service Representative", "Account Manager"],
+];
+const jsQuery = (titles) =>
+  `(${titles.map((t) => `title:"${t}"`).join(" OR ")}) AND ${JS_RESTORATION}`;
+
+const JS_DEFAULTS = {
+  titles: JS_TITLES.join(", "),
+  indeedQueries: JS_QUERY_GROUPS.map(jsQuery).join("\n"),
   locations: "United States",
   timeRange: "7d",
+  datePosted: "7",
+  country: "us",
   limit: 50,
+  indeedLimit: 250,
   employment: ["FULL_TIME"],
   description: ["restoration", "water damage", "fire damage",
     "mold remediation", "mitigation", "Xactimate", "Symbility", "IICRC",
@@ -1491,15 +1547,26 @@ const jsRates = (scraper = "linkedin") =>
     || JS_RATES_FALLBACK.linkedin;
 const jsBoard = (s) =>
   (JS_SCRAPERS.find(([v]) => v === s.scraper) || JS_SCRAPERS[0])[1];
-/* results are billed per job actually returned, so limit × rate is a ceiling */
+/* Indeed keeps its own result cap: at a twentieth of LinkedIn's price a 50-job
+   ceiling would just throw away coverage, and one number can't serve both. */
+const jsLimit = (s) => (s.scraper === "indeed" ? +s.indeedLimit : +s.limit)
+  || jsRates(s.scraper).limitDefault;
+const jsQueries = (s) => splitLines(s.indeedQueries).slice(0, JS_MAX_QUERIES);
+/* results are billed per job actually returned, so limit × rate is a ceiling.
+   Indeed runs one metered run per query, so both halves scale with the batch */
 const jsMaxCost = (s) => {
   const r = jsRates(s.scraper);
-  return (+s.limit || r.limitDefault) *
-    (s.scraper === "linkedin" && s.recruiterOnly
-      ? r.recruiterPerResultUsd : r.perResultUsd);
+  if (s.scraper === "indeed") {
+    const n = Math.max(1, jsQueries(s).length);
+    return n * (jsLimit(s) * r.perResultUsd + (r.startUsd || 0));
+  }
+  return jsLimit(s) * (s.recruiterOnly
+    ? r.recruiterPerResultUsd : r.perResultUsd);
 };
 const usd = (n) => n == null ? "—"
   : "$" + (+n >= 0.1 || +n === 0 ? (+n).toFixed(2) : (+n).toFixed(3));
+const clampTo = (n, r) =>
+  Math.min(Math.max(+n || r.limitDefault, r.limitMin), r.limitMax);
 const splitCommas = (s) => String(s || "").split(/[,\n]/).map((x) => x.trim()).filter(Boolean);
 const splitLines = (s) => String(s || "").split(/[\n;]/).map((x) => x.trim()).filter(Boolean);
 
@@ -1510,9 +1577,14 @@ function jsSettings() {
   return {
     scraper: s.scraper === "indeed" ? "indeed" : "linkedin",
     titles: s.titles ?? JS_DEFAULTS.titles,
+    indeedQueries: s.indeedQueries ?? JS_DEFAULTS.indeedQueries,
     locations: s.locations ?? JS_DEFAULTS.locations,
     timeRange: s.timeRange || JS_DEFAULTS.timeRange,
+    // "" is a real choice on Indeed's date filter (any time) — ?? not ||
+    datePosted: s.datePosted ?? JS_DEFAULTS.datePosted,
+    country: s.country || JS_DEFAULTS.country,
     limit: +s.limit || JS_DEFAULTS.limit,
+    indeedLimit: +s.indeedLimit || JS_DEFAULTS.indeedLimit,
     arrangement: s.arrangement || [],
     employment: s.employment ?? JS_DEFAULTS.employment,
     seniority: s.seniority || [], hasSalary: !!s.hasSalary,
@@ -1607,11 +1679,23 @@ function openJobSearchSettings() {
             <small>per 1,000 jobs</small></span>
           <span class="board-tag">${b.tag}</span>
         </label>`).join("")}</div>
-      <label>Job titles — comma-separated, blank = any
+      <label class="li-only">Job titles — comma-separated, blank = any
         <input id="js-titles" value="${esc(s.titles)}"
                placeholder="Insurance Adjuster, Claims Adjuster">
       </label>
-      <label>Locations — one per line, written as “City, State, Country”
+      <label class="in-only">Searches — one per line, each its own run
+        <textarea id="js-queries" rows="6" spellcheck="false"
+          placeholder='(title:"Office Manager" OR title:"Estimator") AND restoration'
+          >${esc(s.indeedQueries)}</textarea>
+        <span class="js-hint">Indeed’s own search box: <b>AND / OR / NOT</b>,
+          parentheses, and <b>title:</b> / <b>company:</b> all work. Up to
+          ${JS_MAX_QUERIES} lines — each is a separate metered run, and the
+          same posting found twice is only imported once.</span>
+      </label>
+      <label>
+        <span class="li-only">Locations — one per line, written as
+          “City, State, Country”</span>
+        <span class="in-only">Location — blank searches the whole country</span>
         <textarea id="js-locations" rows="2"
           placeholder="Miami, Florida, United States">${esc(s.locations)}</textarea>
       </label>
@@ -1621,11 +1705,26 @@ function openJobSearchSettings() {
             `<option value="${v}"${v === s.timeRange ? " selected" : ""}>${l}</option>`).join("")}
           </select>
         </label>
-        <label>Max results (${jsRates().limitMin}–${jsRates().limitMax})
-          <input id="js-limit" type="number" min="${jsRates().limitMin}"
-                 max="${jsRates().limitMax}" value="${s.limit}">
+        <label class="li-only">Max results (${jsRates("linkedin").limitMin}–${jsRates("linkedin").limitMax})
+          <input id="js-limit" type="number" min="${jsRates("linkedin").limitMin}"
+                 max="${jsRates("linkedin").limitMax}" value="${s.limit}">
+        </label>
+        <label class="in-only">Posted within
+          <select id="js-dateposted">${JS_DATE_POSTED.map(([v, l]) =>
+            `<option value="${v}"${v === s.datePosted ? " selected" : ""}>${l}</option>`).join("")}
+          </select>
+        </label>
+        <label class="in-only">Max results per search
+          (${jsRates("indeed").limitMin}–${jsRates("indeed").limitMax})
+          <input id="js-indeed-limit" type="number" min="${jsRates("indeed").limitMin}"
+                 max="${jsRates("indeed").limitMax}" value="${s.indeedLimit}">
         </label>
       </div>
+      <label class="in-only">Country
+        <select id="js-country">${JS_COUNTRIES.map(([v, l]) =>
+          `<option value="${v}"${v === s.country ? " selected" : ""}>${l}</option>`).join("")}
+        </select>
+      </label>
       <details class="js-adv li-only"${advancedUsed ? " open" : ""}>
         <summary>Advanced filters</summary>
         <div class="js-group-label">Work arrangement</div>
@@ -1669,10 +1768,13 @@ function openJobSearchSettings() {
     scraper: (document.querySelector('#js-form [name="js-scraper"]:checked')
       || {}).value === "indeed" ? "indeed" : "linkedin",
     titles: $("js-titles").value.trim(),
+    indeedQueries: $("js-queries").value.trim(),
     locations: $("js-locations").value.trim(),
     timeRange: $("js-time").value,
-    limit: Math.min(Math.max(+$("js-limit").value || jsRates().limitDefault,
-      jsRates().limitMin), jsRates().limitMax),
+    datePosted: $("js-dateposted").value,
+    country: $("js-country").value,
+    limit: clampTo(+$("js-limit").value, jsRates("linkedin")),
+    indeedLimit: clampTo(+$("js-indeed-limit").value, jsRates("indeed")),
     arrangement: [...document.querySelectorAll('#js-form [data-g="arr"]:checked')].map((i) => i.value),
     employment: [...document.querySelectorAll('#js-form [data-g="emp"]:checked')].map((i) => i.value),
     seniority: [...document.querySelectorAll('#js-form [data-g="sen"]:checked')].map((i) => i.value),
@@ -1693,12 +1795,19 @@ function openJobSearchSettings() {
     const rate = recruiter
       ? jsRates(c.scraper).recruiterPerResultUsd : jsRates(c.scraper).perResultUsd;
     const per1k = "$" + (rate * 1000).toFixed(2) + " per 1,000";
+    const asked = splitLines(c.indeedQueries).length;
+    const n = jsQueries(c).length;
+    // on Indeed the ceiling is per search × searches — say so, or the number lies
+    const scope = c.scraper === "indeed"
+      ? `for up to ${jsLimit(c)} jobs × ${n || 1} search${n === 1 ? "" : "es"}`
+      : `for up to ${jsLimit(c)} jobs`;
     $("js-estimate").innerHTML = `Maximum cost on
       <span class="board-chip board-chip-${c.scraper}">${jsBoard(c)}</span>:
       <strong>${usd(jsMaxCost(c))}</strong>
-      for up to ${c.limit} jobs${recruiter
+      ${scope}${recruiter
         ? ` <span class="js-price-warn">recruiter rate — ${per1k}</span>`
-        : ` · ${per1k}`}`;
+        : ` · ${per1k}`}${c.scraper === "indeed" && asked > JS_MAX_QUERIES
+        ? ` <span class="js-price-warn">only the first ${JS_MAX_QUERIES} searches run</span>` : ""}`;
   };
   estimate();
   $("js-form").addEventListener("input", estimate);
@@ -1729,18 +1838,21 @@ function openJobSearchConfirm() {
   const s = jsSettings();
   if (!s.saved) { openJobSearchSettings(); return; }
   const indeed = s.scraper === "indeed";
-  // Indeed runs one search — confirm exactly what will be sent, not the list
-  const titles = indeed
-    ? splitCommas(s.titles).slice(0, 1) : splitCommas(s.titles);
+  // confirm exactly what will be sent: Indeed takes one location, N searches
+  const queries = jsQueries(s);
+  const titles = splitCommas(s.titles);
   const locations = indeed
     ? splitLines(s.locations).slice(0, 1) : splitLines(s.locations);
-  if (indeed && !titles.length) {   // the server 400s on a blank position
-    toast("Indeed needs a job title — add one in settings");
+  if (indeed && !queries.length) {   // the server 400s on an empty batch
+    toast("Indeed needs a search — add one in settings");
     openJobSearchSettings();
     return;
   }
   const keywords = splitCommas(s.description);
-  const timeLabel = (JS_TIME_RANGES.find(([v]) => v === s.timeRange) || [, "?"])[1];
+  const timeLabel = indeed
+    ? (JS_DATE_POSTED.find(([v]) => v === s.datePosted) || [, "?"])[1]
+    : (JS_TIME_RANGES.find(([v]) => v === s.timeRange) || [, "?"])[1];
+  const countryLabel = (JS_COUNTRIES.find(([v]) => v === s.country) || [, "?"])[1];
   const max = jsMaxCost(s);
   // 18 default titles would swallow the popup — show a few and count the rest
   const brief = (arr, n) => arr.length > n
@@ -1754,19 +1866,24 @@ function openJobSearchConfirm() {
       <div>
         <div class="board-banner-name">${jsBoard(s)}</div>
         <div class="board-banner-sub">${indeed
-          ? "One title, one location, jobs only — no company records"
+          ? `${queries.length} boolean search${queries.length === 1 ? "" : "es"},
+             jobs only — no company records`
           : "Full filters — organizations also land as company leads"}</div>
       </div>
       <button type="button" class="board-swap" id="js-swap">Use ${indeed
         ? "LinkedIn" : "Indeed"} instead</button>
     </div>
     <div class="import-report">
-      ${row("Job titles", brief(titles, 3) || "Any")}
-      ${row("Locations", brief(locations, 2) || "Anywhere")}
+      ${indeed
+        ? queries.map((q, i) => row(i ? "" : "Searches",
+            q.length > 96 ? q.slice(0, 96) + "…" : q)).join("")
+        : row("Job titles", brief(titles, 3) || "Any")}
+      ${row(indeed ? "Location" : "Locations",
+        (indeed ? locations[0] : brief(locations, 2)) || (indeed ? countryLabel : "Anywhere"))}
       ${indeed ? "" : row("Company keywords", brief(keywords, 3))}
-      ${indeed ? "" : row("Posted within", timeLabel)}
+      ${row("Posted within", timeLabel)}
       ${!indeed && s.maxEmployees ? row("Company size", `≤ ${s.maxEmployees} employees`) : ""}
-      ${row("Max results", String(s.limit))}
+      ${row(indeed ? "Max results per search" : "Max results", String(jsLimit(s)))}
       ${!indeed && s.recruiterOnly ? row("Recruiter contacts", "On — higher rate") : ""}
     </div>
     <p class="modal-note">Costs at most <strong>${usd(max)}</strong> — you only pay
@@ -1797,7 +1914,10 @@ async function runJobSearch() {
     <div class="import-busy">
       <div class="spinner"></div>
       <div><strong>Searching ${jsBoard(s)} jobs…</strong></div>
-      <div class="dz-sub">Usually 10–60 seconds. New jobs land in the Job board tab.</div>
+      <div class="dz-sub">${s.scraper === "indeed"
+        ? `Running ${jsQueries(s).length} searches at once — usually under
+           two minutes.` : "Usually 10–60 seconds."}
+        New jobs land in the Job board tab.</div>
     </div>`;
   $("modal-backdrop").classList.remove("hidden");
   try {
@@ -1806,9 +1926,12 @@ async function runJobSearch() {
       body: JSON.stringify({
         scraper: s.scraper,
         titleSearch: splitCommas(s.titles),
+        indeedQueries: jsQueries(s),
         locationSearch: splitLines(s.locations),
         timeRange: s.timeRange,
-        limit: +s.limit,
+        datePosted: s.datePosted,
+        country: s.country,
+        limit: jsLimit(s),
         aiWorkArrangementFilter: s.arrangement,
         aiEmploymentTypeFilter: s.employment,
         seniorityFilter: s.seniority,
@@ -1859,6 +1982,9 @@ function renderJobSearchResult(o) {
       ${line("Skipped — already in the base", o.duplicates)}
       ${line("New companies added", o.companies?.inserted)}
       ${line("Companies enriched (logo, website…)", o.companies?.updated)}
+      ${o.queriesFailed
+        ? `<div class="ir-row"><span>Searches that failed</span>
+             <strong class="js-price-warn">${o.queriesFailed}</strong></div>` : ""}
       <div class="ir-row"><span>Actual cost charged</span><strong>${cost}</strong></div>
     </div>
     <div class="modal-actions">
