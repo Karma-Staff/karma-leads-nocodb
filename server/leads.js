@@ -94,6 +94,10 @@ function keyset(col, dir, cursor, params) {
 router.get("/api/leads", async (req, res, next) => {
   try {
     const p = req.query;
+    // the Removed tab is a Manage surface: members never list banned leads
+    // (their remove slip-ups are covered by the 5-second undo instead)
+    if (p.removed === "true" && req.user.role !== "admin")
+      return res.status(403).json({ error: "admins only" });
     const [col, dir] = SORTS[p.sort] || SORTS.recent;
     const limit = Math.min(Math.max(+p.limit || 50, 1), 200);
     const { where, params } = buildFilters(p);
@@ -242,50 +246,58 @@ router.post("/api/leads/:id/remove", express.json({ limit: "8kb" }), async (req,
       const cur = (await client.query(
         "SELECT * FROM leads WHERE id = $1 FOR UPDATE", [id])).rows[0];
       if (!cur) return null;
-      let affected = 0;
+      let ids = [];
       if (cur.phone_key) {
         await client.query(
           `INSERT INTO blocklist (phone, phone_key, company, reason, added_by)
            VALUES ($1, $2, $3, $4, $5) ON CONFLICT (phone_key) DO NOTHING`,
           [cur.phone, cur.phone_key, cur.company || cur.name, reason, req.user.email]);
-        affected = (await client.query(
+        ids = (await client.query(
           `UPDATE leads SET removed = true, updated_at = now()
-           WHERE phone_key = $1 AND NOT removed`, [cur.phone_key])).rowCount;
+           WHERE phone_key = $1 AND NOT removed RETURNING id`,
+          [cur.phone_key])).rows.map((r) => r.id);
       }
-      if (!affected) {
+      if (!ids.length) {
         await client.query(
           "UPDATE leads SET removed = true, updated_at = now() WHERE id = $1", [id]);
-        affected = 1;
+        ids = [id];
       }
       await activity.log({ actor: req.user.email, user_id: req.user.id,
         action: "remove", lead_id: id, lead_code: cur.lead_code,
         lead_name: cur.name, to_value: reason || "no reason given",
-        meta: { affected } }, client);
+        meta: { affected: ids.length } }, client);
       await touchRecent(client, req.user.id, id, "remove");
-      return { affected };
+      // ids let the client's undo toast hand back exactly this sweep
+      return { affected: ids.length, ids };
     });
     if (!out) return res.status(404).json({ error: "no such lead" });
     res.json(out);
   } catch (e) { next(e); }
 });
 
-router.post("/api/leads/:id/restore", async (req, res, next) => {
+router.post("/api/leads/:id/restore", express.json({ limit: "8kb" }), async (req, res, next) => {
   try {
     const id = +req.params.id;
+    // the undo toast hands back the exact id set its remove swept — a plain
+    // restore (no body) still un-removes just the one lead
+    const extra = Array.isArray(req.body?.ids)
+      ? req.body.ids.filter(Number.isInteger).slice(0, 500) : [];
+    const ids = [...new Set([id, ...extra])];
     const out = await tx(async (client) => {
       const cur = (await client.query(
         "SELECT * FROM leads WHERE id = $1 FOR UPDATE", [id])).rows[0];
       if (!cur) return null;
-      await client.query(
-        "UPDATE leads SET removed = false, updated_at = now() WHERE id = $1", [id]);
+      const affected = (await client.query(
+        `UPDATE leads SET removed = false, updated_at = now()
+         WHERE id = ANY($1)`, [ids])).rowCount;
       if (cur.phone_key)
         await client.query("DELETE FROM blocklist WHERE phone_key = $1",
           [cur.phone_key]);
       await activity.log({ actor: req.user.email, user_id: req.user.id,
         action: "restore", lead_id: id, lead_code: cur.lead_code,
-        lead_name: cur.name }, client);
+        lead_name: cur.name, meta: { affected } }, client);
       await touchRecent(client, req.user.id, id, "restore");
-      return { ok: true };
+      return { ok: true, affected };
     });
     if (!out) return res.status(404).json({ error: "no such lead" });
     res.json(out);
