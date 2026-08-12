@@ -188,12 +188,39 @@ and NEVER connects to Postgres directly.
 ## Job search: two boards, one endpoint
 
 `POST /api/job-search` takes a `scraper` key — `linkedin` (the fantastic-jobs
-actor, default, full filter set) or `indeed` (`misceres~indeed-scraper`: one
-title + one location per run, no filters, lower per-result price). The
-registry in `server/jobsearch.js` (`SCRAPERS`/`RATES`/`normalizeItem()`) owns
-the per-board actor id, rates and item mapping; the admin picks the board in
-the ⚙ job-search settings. Jobs from either board land as `kind = 'job'`
+actor, default, full filter set) or `indeed` (`valig~indeed-jobs-scraper`).
+The registry in `server/jobsearch.js` (`SCRAPERS`/`RATES`/`normalizeItem()`)
+owns the per-board actor id, rates and item mapping; the admin picks the board
+in the ⚙ job-search settings. Jobs from either board land as `kind = 'job'`
 leads, told apart by `source_file` (`LinkedIn search` / `Indeed search`).
+
+**Indeed is one run per query, and a query is a whole Indeed search.** The
+actor's `title` field is passed straight to Indeed's `q`, so it takes boolean
+operators, parentheses and the `title:`/`company:` operators — nineteen job
+titles are three runs, not nineteen. `buildIndeedInputs()` turns the client's
+`indeedQueries` list into one input each (capped at `MAX_QUERIES`), they run
+concurrently, and the results merge into one deduped set. Everything else the
+actor accepts is a flat field with a whitelist: `country` (its own enum),
+`location` (blank = nationwide), `datePosted` in days, `limit` ≤ 1000.
+Anything unrecognised falls back to the *narrow* default, never to "any time".
+
+Two things Indeed's shape forces:
+
+- **The posting's identity is `?jk=`**, so `urlKey()` keeps that one query
+  param. Strip the query string like it does for LinkedIn's tracking junk and
+  every Indeed posting collapses onto `/viewjob` — one insert, then every
+  later job filed as a duplicate.
+- **Cost scales with the batch, not just the cap**: each query is its own
+  metered run with its own start fee, so the confirm step quotes
+  queries × limit × rate. Indeed prices per event with `eventTieredPricingUsd`
+  (not the flat `eventPriceUsd`); `eventUsd()` reads either and takes the
+  dearest tier, because every figure it feeds is a ceiling shown before
+  spending.
+
+Indeed's boolean is a relevance hint, not a strict filter — measured on a live
+run, roughly a quarter to a third of a batch carries no restoration term in
+title or employer. Tighten the query lines rather than assuming the AND clause
+excluded anything.
 
 The choice changes price, filters and whether companies get written, so it is
 deliberately loud in the UI (`JS_BOARDS`/`JS_MARK` in `app.js`, `.board-*` in
@@ -214,9 +241,12 @@ whole base; bare organization name only among `source = 'Job board'` companies
 blank fields are backfilled — a scrape never overwrites curated data. The
 front end overlays `logo_url` on the initials avatar and falls back to
 initials if the URL goes stale. Indeed scrapes skip the company upsert on
-purpose: their items carry only a display name (no HQ/logo/website), and the
-bare-name rule above assumes one LinkedIn entity per name — a second board
-feeding it could merge franchises.
+purpose: its `employer` object does carry a logo, website and headcount
+bracket, but the names are per-franchise ("Servpro Phoenix") with no HQ to key
+on, and the bare-name rule above assumes one LinkedIn entity per name — a
+second board feeding it is exactly how franchises get merged. Those employer
+facts land on the job row instead (industry, headcount **floor** — Indeed
+reports a bracket like "201 to 500", never a count).
 
 ## Dedupe: franchises are not duplicates
 

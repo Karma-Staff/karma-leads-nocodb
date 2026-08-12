@@ -8,6 +8,11 @@
    resolved from the SCRAPERS registry below. Unknown keys fall back to
    LinkedIn, so old clients keep working.
 
+   Indeed is one run per *query*, not per title: the actor's `title` field is
+   handed straight to Indeed's q, so one string can carry a whole boolean
+   search. The client sends a short list of them and they run concurrently
+   into one merged, deduped result set — see buildIndeedInputs().
+
    Admin-only at the route level in index.js: this endpoint spends the org's
    Apify balance per result, which is the one thing a base user must not be
    able to trigger. The whitelist rebuild below is the second lock — a crafted
@@ -35,30 +40,50 @@ const SCRAPERS = {
     sourceFile: "LinkedIn search",
   },
   indeed: {
-    actor: "misceres~indeed-scraper",
+    actor: "valig~indeed-jobs-scraper",
     label: "Indeed",
     sourceFile: "Indeed search",
+    /* the actor's own default is 128 MB, which truncates or dies on a broad
+       nationwide pull. 1 GB is the sweet spot: the start event is charged one
+       per GB, so 2 GB would double that fee for no measured gain. */
+    memoryMbytes: 1024,
   },
 };
 const scraperKey = (v) => (SCRAPERS[v] ? v : "linkedin");
 
 /* fallback pay-per-result rates, used only when the live lookup fails.
-   limitMax is our spend ceiling on both boards, not an actor limit. */
+   limitMax is our spend ceiling, and on Indeed it is also the actor's own
+   ceiling (its schema caps `limit` at 1000). startUsd is the per-run start
+   event — negligible alone, but Indeed pays it once per batched query. */
 const RATES = {
   linkedin: {
     perResultUsd: 0.005,
     recruiterPerResultUsd: 0.015,
+    startUsd: 0,
     limitMin: 10,
     limitMax: 500,
     limitDefault: 100,
   },
   indeed: {
-    perResultUsd: 0.003,            // $3 / 1,000 job listings
+    perResultUsd: 0.0001,           // $0.10 / 1,000 job listings
+    startUsd: 0.001,                // one Actor Start event per GB of memory
     limitMin: 10,
-    limitMax: 500,
-    limitDefault: 100,
+    limitMax: 1000,
+    limitDefault: 250,
   },
 };
+
+/* Apify prices an event either flat (eventPriceUsd) or per plan tier
+   (eventTieredPricingUsd) — valig~indeed-jobs-scraper uses the tiered shape.
+   The account's tier isn't visible here, so take the dearest one: every figure
+   derived from this is a "costs at most" ceiling shown before spending. */
+function eventUsd(e) {
+  if (typeof e?.eventPriceUsd === "number") return e.eventPriceUsd;
+  const tiers = Object.values(e?.eventTieredPricingUsd || {})
+    .map((t) => t?.tieredEventPriceUsd)
+    .filter((n) => typeof n === "number");
+  return tiers.length ? Math.max(...tiers) : undefined;
+}
 
 const ratesCache = {};               // scraper key -> { rates, at }
 async function actorRates(key) {
@@ -69,12 +94,15 @@ async function actorRates(key) {
   const ev = infos[infos.length - 1]?.pricingPerEvent?.actorChargeEvents || {};
   /* each actor names its per-result event differently — take the standard
      dataset-item event when present, else the first priced event */
-  const per = ev["apify-default-dataset-item"]?.eventPriceUsd
-    ?? Object.values(ev).find((e) => typeof e?.eventPriceUsd === "number")?.eventPriceUsd;
+  const per = eventUsd(ev["apify-default-dataset-item"])
+    ?? Object.values(ev).map(eventUsd).find((n) => typeof n === "number");
   const rates = { ...RATES[key] };
   if (typeof per === "number") rates.perResultUsd = per;
+  const start = eventUsd(ev["apify-actor-start"]);
+  if (typeof start === "number")
+    rates.startUsd = start * Math.max(1, (SCRAPERS[key].memoryMbytes || 0) / 1024);
   if (key === "linkedin") {
-    const rec = ev["recruiter-url-filtered-result"]?.eventPriceUsd;
+    const rec = eventUsd(ev["recruiter-url-filtered-result"]);
     rates.recruiterPerResultUsd = typeof per === "number" && typeof rec === "number"
       ? per + rec : RATES.linkedin.recruiterPerResultUsd;
   }
@@ -121,6 +149,20 @@ const SENIORITIES = ["Internship", "Entry level", "Associate",
 const ARRANGEMENTS = ["On-site", "Hybrid", "Remote OK", "Remote Solely"];
 const EMPLOYMENT = ["FULL_TIME", "PART_TIME", "CONTRACTOR", "TEMPORARY", "INTERN"];
 
+/* Indeed side, straight off the actor's input schema. DATE_POSTED is a count
+   of days as a string; "" means any time. COUNTRIES is the actor's own enum —
+   it rejects anything else, so this is a whitelist, not decoration. */
+const DATE_POSTED = ["", "1", "3", "7", "14"];
+const COUNTRIES = ["ar", "au", "at", "bh", "be", "br", "ca", "cl", "cn", "co",
+  "cr", "cz", "dk", "ec", "eg", "fi", "fr", "de", "gr", "hk", "hu", "in", "id",
+  "ie", "il", "it", "jp", "kw", "lu", "my", "mx", "ma", "nl", "nz", "ng", "no",
+  "om", "pk", "pa", "pe", "ph", "pl", "pt", "qa", "ro", "sa", "sg", "za", "kr",
+  "es", "se", "ch", "tw", "th", "tr", "ua", "ae", "uk", "us", "uy", "ve", "vn"];
+/* each query is its own actor run, its own start fee and its own `limit`, so
+   this cap is a spend guard: the confirm step quotes queries × limit × rate */
+const MAX_QUERIES = 5;
+const MAX_QUERY_CHARS = 500;
+
 const strList = (v, max = 15) => (Array.isArray(v) ? v : [])
   .map((s) => String(s).trim()).filter(Boolean).slice(0, max);
 const pickAllowed = (v, allowed) => strList(v).filter((s) => allowed.includes(s));
@@ -153,30 +195,47 @@ function buildLinkedinInput(p = {}) {
   return input;
 }
 
-/* misceres~indeed-scraper takes ONE search, not lists: the first title is the
-   position, the first location line the locality. Indeed wants the country as
-   its own field, so a trailing "United States" is stripped off the location
-   (a bare "United States" line means nationwide — no location at all). */
-function buildIndeedInput(p = {}) {
-  const titles = strList(p.titleSearch, 40);
-  const input = {
-    position: titles[0] || "",
-    country: "US",
-    maxItemsPerSearch: clampLimit(p.limit, RATES.indeed),
-    parseCompanyDetails: false,
-    saveOnlyUniqueItems: true,
-    followApplyRedirects: false,
+/* valig~indeed-jobs-scraper takes ONE free-text search per run and passes it
+   to Indeed's own q parameter — verified against the live actor, quotes and
+   all. That means a query is a whole Indeed search, not a job title: boolean
+   operators (AND / OR / NOT), parentheses, and the title:/company: operators
+   all work, so seventeen job titles are three runs, not seventeen.
+
+   Hence a list of queries, each becoming its own run, merged and deduped on
+   the posting URL downstream. Everything else on the actor is one flat field:
+   country (its enum), location (blank = nationwide, so a bare "United States"
+   line is stripped) and datePosted in days. */
+function buildIndeedInputs(p = {}) {
+  const queries = strList(p.indeedQueries ?? p.titleSearch, MAX_QUERIES);
+  const country = String(p.country || "").trim().toLowerCase();
+  /* "" is a real choice here (any time) so it survives, but anything the actor
+     would reject falls back to 7 days rather than to the widest, priciest
+     setting — an unrecognised value must never quietly buy a full backlog */
+  const asked = p.datePosted === undefined ? "7" : String(p.datePosted);
+  const datePosted = DATE_POSTED.includes(asked) ? asked : "7";
+  const base = {
+    country: COUNTRIES.includes(country) ? country : "us",
+    limit: clampLimit(p.limit, RATES.indeed),
   };
   const loc = (strList(p.locationSearch)[0] || "")
     .replace(/,?\s*(united states|usa|us)\.?$/i, "").trim();
-  if (loc) input.location = loc;
-  return input;
+  if (loc) base.location = loc;
+  if (datePosted) base.datePosted = datePosted;
+  return queries.map((title) => ({ ...base, title }));
 }
 
-/* ---------------- dedupe keys (jobs have no phones — URL is the identity) */
+/* ---------------- dedupe keys (jobs have no phones — URL is the identity)
+   The query string is tracking noise on LinkedIn and gets dropped, but on
+   Indeed it IS the posting: every URL is /viewjob?jk=<id>, so stripping it
+   would collapse the whole board onto one key and every posting after the
+   first would be filed as a duplicate. Keep jk (and its vjk alias). */
 const urlKey = (u) => {
   const s = String(u || "").trim().toLowerCase();
-  return s ? s.split(/[?#]/)[0].replace(/\/+$/, "") : null;
+  if (!s) return null;
+  const [addr, qs] = s.split("#")[0].split("?");
+  const path = addr.replace(/\/+$/, "");
+  const jk = qs && /(?:^|&)v?jk=([^&]+)/.exec(qs);
+  return jk ? `${path}?jk=${jk[1]}` : path;
 };
 const titleOrgKey = (title, org, city) =>
   title && org ? [title, org, city || ""].map((s) =>
@@ -207,37 +266,36 @@ function itemLocation(it) {
   return { city: loc.city || null, state: loc.admin || loc.admin_area || null };
 }
 
-/* Indeed's location is one display string — "Miami, FL 33130", "Remote", or
-   "Remote in Tampa, FL". Zip codes are noise for our columns. */
-function indeedLocation(s) {
-  const str = String(s || "").replace(/^remote(\s+in\s+)?/i, "").trim();
-  if (!str) return { city: null, state: null };
-  const parts = str.split(",").map((x) => x.replace(/\d{5}(-\d{4})?/g, "").trim())
-    .filter(Boolean);
-  return { city: parts[0] || null, state: parts[1] || null };
+/* Indeed's employer.industry is an internal code — "Iv1_CONSUMER_GOODS_AND_
+   SERVICES" — not a label anyone would want to read in a table cell */
+function indeedIndustry(v) {
+  const s = String(v || "").replace(/^iv\d+_/i, "").replace(/_+/g, " ")
+    .trim().toLowerCase();
+  return s ? s.replace(/\b[a-z]/g, (c) => c.toUpperCase()) : null;
 }
 
-/* Indeed reports postedAt as relative text ("Just posted", "Active 3 days
-   ago", "30+ days ago") — turn it into a date, else fall back to today */
-function indeedPostedDate(s, stamp) {
-  const str = String(s || "");
-  if (/just posted|today/i.test(str)) return stamp;
-  const m = /(\d+)\+?\s*day/i.exec(str);
-  if (!m) return null;
-  const d = new Date(stamp + "T00:00:00Z");
-  d.setUTCDate(d.getUTCDate() - +m[1]);
-  return d.toISOString().slice(0, 10);
+/* employer.employeesCount is a bracket ("11 to 50", "201 to 500"), never an
+   actual headcount. Store the floor: a size filter that reads "≤ 200" should
+   let a "201 to 500" company fail, and the floor never overstates the org. */
+function indeedHeadcount(v) {
+  const m = /(\d[\d,]*)/.exec(String(v || ""));
+  return m ? +m[1].replace(/,/g, "") : null;
 }
 
 /* one lead-shaped record per raw actor item, whatever the board */
 function normalizeItem(key, it, stamp) {
   if (key === "indeed") {
-    const { city, state } = indeedLocation(it.location);
+    const loc = (it.location && typeof it.location === "object") ? it.location : {};
+    const emp = (it.employer && typeof it.employer === "object") ? it.employer : {};
     return {
-      title: it.positionName || "Job posting", org: clean(it.company),
-      contact: null, contactTitle: null, industry: null, employees: null,
-      city, state, url: it.url || null,
-      date: indeedPostedDate(it.postedAt, stamp) || stamp,
+      title: clean(it.title) || "Job posting", org: clean(emp.name),
+      contact: null, contactTitle: null,
+      industry: indeedIndustry(emp.industry),
+      employees: indeedHeadcount(emp.employeesCount),
+      // admin1Code is the two-letter state; city is already a bare city name
+      city: cleanPlace(loc.city), state: cleanPlace(loc.admin1Code),
+      url: it.url || (it.key ? `https://www.indeed.com/viewjob?jk=${it.key}` : null),
+      date: isoDate(it.datePublished || it.dateOnIndeed) || stamp,
     };
   }
   const { city, state } = itemLocation(it);
@@ -261,10 +319,12 @@ function normalizeItem(key, it, stamp) {
    within one job board the org name IS one LinkedIn entity, which keeps
    repeat scrapes idempotent without risking a cross-source franchise merge.
 
-   Indeed skips this on purpose: its items carry only a display name — no HQ,
-   logo, website or industry — and the "name alone within the Job board
-   source" rule above assumes one LinkedIn entity per name. Mixing a second
-   board into it would let a bare "SERVPRO" posting swallow franchises. */
+   Indeed still skips this on purpose. Its employer object does carry a logo,
+   website and headcount bracket, but the "name alone within the Job board
+   source" rule above assumes one LinkedIn entity per name, and Indeed employer
+   names are per-franchise ("Servpro Phoenix") with no HQ to key on — feeding a
+   second board into that rule is exactly how franchises get merged. Those
+   employer facts land on the job row instead (see normalizeItem). */
 
 const httpUrl = (u) => {
   const s = String(u || "").trim();
@@ -382,13 +442,13 @@ async function lastRunCost(actor) {
   const d = r?.data || {};
   const counts2 = d.chargedEventCounts || {};
   const prices = d.pricingInfo?.pricingPerEvent?.actorChargeEvents || {};
-  let eventUsd = 0, priced = false;
+  let total = 0, priced = false;
   for (const [k, n] of Object.entries(counts2)) {
-    const p = prices[k]?.eventPriceUsd;
-    if (typeof p === "number") { eventUsd += p * (+n || 0); priced = true; }
+    const p = eventUsd(prices[k]);
+    if (typeof p === "number") { total += p * (+n || 0); priced = true; }
   }
   return {
-    usd: priced ? eventUsd : null,
+    usd: priced ? total : null,
     usageTotalUsd: typeof d.usageTotalUsd === "number" ? d.usageTotalUsd : null,
     status: d.status || null,
   };
@@ -398,19 +458,43 @@ router.post("/api/job-search", express.json({ limit: "64kb" }), async (req, res,
   try {
     const key = scraperKey(req.body?.scraper);
     const scraper = SCRAPERS[key];
-    const input = key === "indeed"
-      ? buildIndeedInput(req.body || {}) : buildLinkedinInput(req.body || {});
-    if (key === "indeed" && !input.position)
-      return res.status(400).json({ error: "Indeed needs a job title to search for" });
-    const limit = key === "indeed" ? input.maxItemsPerSearch : input.limit;
+    const inputs = key === "indeed"
+      ? buildIndeedInputs(req.body || {}) : [buildLinkedinInput(req.body || {})];
+    if (!inputs.length)
+      return res.status(400).json({ error: "Indeed needs a search query to run" });
+    /* refuse an over-long query rather than truncating it: a boolean cut
+       mid-quote still runs, still bills, and quietly searches for the wrong
+       thing — which is worse than being told to shorten it */
+    const tooLong = inputs.find((i) => (i.title || "").length > MAX_QUERY_CHARS);
+    if (tooLong)
+      return res.status(400).json({ error: `Indeed searches are capped at `
+        + `${MAX_QUERY_CHARS} characters — shorten “${tooLong.title.slice(0, 60)}…”` });
+    const limit = inputs[0].limit;
     const known = await existingJobKeys();
 
-    const items = await apify(
-      `/acts/${scraper.actor}/run-sync-get-dataset-items?timeout=280&format=json&clean=true`,
+    /* one sync run per query, concurrently: a batch of three costs the wall
+       clock of the slowest, not the sum. 280s keeps each run inside Apify's
+       300s sync window, so a run that overruns still hands back what it got. */
+    const runOne = (input) => apify(
+      `/acts/${scraper.actor}/run-sync-get-dataset-items?timeout=280&format=json&clean=true`
+      + (scraper.memoryMbytes ? `&memory=${scraper.memoryMbytes}` : ""),
       { method: "POST", body: JSON.stringify(input) });
-    /* misceres reports "no matches" as one item with an error field */
-    const found = (Array.isArray(items) ? items : [])
-      .filter((it) => it && !it.error);
+
+    // one bad query must not sink the batch — only an all-failed batch throws
+    const settled = await Promise.allSettled(inputs.map(runOne));
+    const failed = settled.filter((r) => r.status === "rejected");
+    if (failed.length === settled.length) throw failed[0].reason;
+    for (const f of failed) console.warn("job-search batch failed:", f.reason?.message);
+    const items = settled.flatMap((r) =>
+      r.status === "fulfilled" && Array.isArray(r.value) ? r.value : []);
+
+    /* billing is per dataset item, so the cost math counts everything the
+       actors returned — including the rows dropped just below */
+    const billable = items.length;
+    /* an expired Indeed posting is not a lead anyone can act on; an actor that
+       hit trouble reports it as a single row carrying an error field */
+    const found = items.filter((it) =>
+      it && !it.error && !(key === "indeed" && it.expired));
 
     const stamp = new Date().toISOString().slice(0, 10);
 
@@ -452,9 +536,13 @@ router.post("/api/job-search", express.json({ limit: "64kb" }), async (req, res,
     let cost = null;
     try {
       const rates = await actorRates(key).catch(() => RATES[key]);
-      const perJob = key === "linkedin" && input.recruiterOnly
+      const perJob = key === "linkedin" && inputs[0].recruiterOnly
         ? rates.recruiterPerResultUsd : rates.perResultUsd;
-      const computed = found.length * perJob + 0.0001;
+      /* every batched query is its own run, so the start fee is paid per
+         query — and lastRunCost only ever sees one of them, which is why the
+         computed figure below is the one that wins the max() */
+      const computed = billable * perJob
+        + (rates.startUsd || 0) * inputs.length + 0.0001;
       const last = await lastRunCost(scraper.actor).catch(() => ({}));
       const known2 = [computed, last.usd, last.usageTotalUsd]
         .filter((v) => typeof v === "number");
@@ -463,11 +551,16 @@ router.post("/api/job-search", express.json({ limit: "64kb" }), async (req, res,
 
     activity.log({ actor: req.user.email, user_id: req.user.id, action: "jobsearch",
       meta: { scraper: key, found: found.length, inserted, duplicates,
-        companies: companies.inserted, costUsd: cost?.usd ?? null } });
+        queries: inputs.length, companies: companies.inserted,
+        costUsd: cost?.usd ?? null } });
 
     res.json({
       scraper: key,
-      input: { limit, timeRange: input.timeRange },
+      input: key === "indeed"
+        ? { limit, queries: inputs.length, datePosted: inputs[0].datePosted ?? "",
+            country: inputs[0].country, location: inputs[0].location ?? null }
+        : { limit, timeRange: inputs[0].timeRange },
+      queriesFailed: failed.length,
       found: found.length, inserted, duplicates,
       companies: { inserted: companies.inserted, updated: companies.updated },
       cost,
@@ -504,4 +597,7 @@ router.get("/api/apify-usage", async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-module.exports = { router, resolveCompanies };   // resolveCompanies: for tests
+// everything past `router` is exported for tests only
+module.exports = {
+  router, resolveCompanies, buildIndeedInputs, normalizeItem, urlKey,
+};
