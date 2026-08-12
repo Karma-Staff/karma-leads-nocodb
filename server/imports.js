@@ -228,11 +228,11 @@ async function commitJob(jobId, actor, userId) {
       if (pks.length)
         for (const row of (await client.query(
           `SELECT name, company, email, city, phone_key FROM leads
-           WHERE phone_key = ANY($1)`, [pks])).rows) indexRow(row);
+           WHERE phone_key = ANY($1) AND deleted_at IS NULL`, [pks])).rows) indexRow(row);
       if (emails.length)
         for (const row of (await client.query(
           `SELECT name, company, email, city, phone_key FROM leads
-           WHERE lower(email) = ANY($1)`, [emails])).rows) indexRow(row);
+           WHERE lower(email) = ANY($1) AND deleted_at IS NULL`, [emails])).rows) indexRow(row);
 
       const banned = new Set((await client.query(
         "SELECT phone_key FROM blocklist")).rows.map((r) => r.phone_key));
@@ -360,7 +360,8 @@ router.get("/api/identity-lookup", gate, async (req, res, next) => {
     const limit = Math.min(Math.max(+req.query.limit || 1000, 1), 2000);
     const rows = (await query(
       `SELECT id, lead_code, kind, email, phone_key, name, company, city, state
-       FROM leads WHERE id > $1 ORDER BY id LIMIT $2`, [after, limit])).rows;
+       FROM leads WHERE id > $1 AND deleted_at IS NULL
+       ORDER BY id LIMIT $2`, [after, limit])).rows;
     res.json({
       list: rows,
       nextCursor: rows.length === limit ? rows[rows.length - 1].id : null,
@@ -383,7 +384,8 @@ router.post("/api/dnc-import", gate, express.json({ limit: "2mb" }), async (req,
     const fresh = keys.filter((k) => !already.has(k));
     const toRemove = fresh.length ? +(await query(
       `SELECT count(*)::int n FROM leads
-       WHERE phone_key = ANY($1) AND NOT removed`, [fresh])).rows[0].n : 0;
+       WHERE phone_key = ANY($1) AND NOT removed
+         AND deleted_at IS NULL`, [fresh])).rows[0].n : 0;
     const plan = { rows: raw.length, usable: keys.length,
       alreadyBanned: already.size, newBans: fresh.length, leadsToRemove: toRemove };
     if (dryRun) return res.json({ dryRun: true, ...plan });

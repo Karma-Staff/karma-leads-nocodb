@@ -640,12 +640,27 @@ body.resizing .lead-row, body.resizing .splitter { pointer-events: none; }
 .detail-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .fav-btn { font-size: 20px; padding: 4px 6px; border-radius: 4px; }
 .fav-btn:hover { background: var(--surface-2); }
-/* the remove/restore control is labeled — a bare 🚫 doesn't say whether it
+/* the two destructive controls sit below the notes, not in the header: they
+   are the end of working a lead, not part of reading it */
+.detail-danger { display: flex; gap: 8px; margin-top: 20px; }
+/* the DNC/restore control is labeled — a bare 🚫 doesn't say whether it
    removes, blocks or disqualifies (it removes AND bans the number) */
 .remove-btn {
   font-size: 12.5px; font-weight: 600; color: var(--ink-2);
   display: inline-flex; align-items: center; gap: 2px;
-  border: 1px solid var(--border); padding: 5px 9px;
+  border: 1px solid var(--border); border-radius: 4px; padding: 5px 9px;
+}
+.remove-btn:hover { color: var(--ink); border-color: var(--ink-3); }
+/* delete sits beside remove and must not read as the same action: same shape,
+   but it warms to red on hover because it is the one that ends in data loss */
+.delete-btn {
+  font-size: 12.5px; font-weight: 600; color: var(--ink-2);
+  display: inline-flex; align-items: center; gap: 2px;
+  border: 1px solid var(--border); border-radius: 4px; padding: 5px 9px;
+}
+.delete-btn:hover { color: #b3261e; border-color: #b3261e; background: #fdecec; }
+:root[data-theme="dark"] .delete-btn:hover {
+  color: #ffb4ab; border-color: #8c1d18; background: #3b1614;
 }
 
 .status-select {
@@ -838,6 +853,37 @@ body.resizing .lead-row, body.resizing .splitter { pointer-events: none; }
 .user-add-row input { flex: 1; min-width: 0; margin-top: 0; padding: 7px 10px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface-2); }
 .modal-field { margin-top: 14px; }
 
+/* trash bin (admin) — same row rhythm as the team list, with the countdown to
+   the 30-day purge doing the work the disabled/role controls do there */
+.trash-list {
+  display: flex; flex-direction: column; gap: 2px;
+  max-height: 46vh; overflow-y: auto; margin-bottom: 14px;
+}
+.trash-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 8px; border-radius: 4px;
+}
+.trash-row:hover { background: var(--surface-2); }
+.trash-kind {
+  flex: 0 0 auto; min-width: 62px; text-align: center;
+  font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+  padding: 3px 7px; border-radius: 3px;
+  background: var(--surface-2); border: 1px solid var(--border); color: var(--ink-2);
+}
+.tk-company { color: var(--cat-1); border-color: var(--cat-1); }
+.tk-person  { color: var(--cat-3); border-color: var(--cat-3); }
+.tk-job     { color: var(--cat-7); border-color: var(--cat-7); }
+.trash-left {
+  flex: 0 0 auto; font-size: 11.5px; font-weight: 600; color: var(--ink-3);
+  white-space: nowrap;
+}
+.trash-left.soon { color: #b3261e; }
+:root[data-theme="dark"] .trash-left.soon { color: #ffb4ab; }
+.trash-row .trash-restore { flex-shrink: 0; white-space: nowrap; font-size: 12.5px; }
+/* the destructive action leads the row, so it must not look like Close */
+#trash-empty { margin-right: auto; }
+#trash-empty:disabled { opacity: .45; cursor: default; }
+
 /* ---------- import drop zone ---------- */
 .dropzone {
   border: 2px dashed var(--border); border-radius: 6px;
@@ -951,8 +997,13 @@ body.dragging #import-btn { outline: 3px solid var(--accent-soft); }
 }
 .board-chip-linkedin { background: #0a66c2; }
 .board-chip-indeed { background: #003a9b; }
-/* on the blue primary button the brand fills can't hold their own — invert */
-.js-board-tag { background: #fff; }
+/* On the blue primary button the brand fills can't hold their own — invert.
+   Smaller and unshouted than the modal chips: it has to sit on ONE line beside
+   the label so the button stays exactly as tall as ⬆ Import leads. */
+.js-board-tag {
+  flex: none; background: #fff; font-size: 9.5px; padding: 1px 5px;
+  text-transform: none; letter-spacing: 0; line-height: 14px;
+}
 .js-board-tag.board-chip-linkedin { color: #0a66c2; background: #fff; }
 .js-board-tag.board-chip-indeed { color: #003a9b; background: #fff; }
 
@@ -973,10 +1024,13 @@ body.dragging #import-btn { outline: 3px solid var(--accent-soft); }
 .board-swap:hover { color: var(--ink); border-color: var(--ink-3); }
 
 .job-search-row { display: flex; gap: 6px; margin-bottom: 6px; }
-/* the button stacks its label over the armed board's chip */
+/* label and armed-board chip on one line. The 19px line-height is the height
+   of .btn-primary's own line box, so with the same 9px padding this button
+   comes out exactly as tall as ⬆ Import leads underneath it. */
 .job-search-row .btn-primary {
-  flex: 1; display: flex; flex-direction: column; align-items: center;
-  gap: 4px; padding: 8px 10px; line-height: 1.15;
+  flex: 1; min-width: 0;
+  display: flex; align-items: center; justify-content: center; gap: 5px;
+  padding: 9px 8px; font-size: 13px; line-height: 19px; white-space: nowrap;
 }
 .btn-gear { padding: 7px 10px; font-size: 15px; line-height: 1; }
 .credits-line {
@@ -1068,6 +1122,9 @@ label.check input[type="checkbox"] { width: auto; margin: 0; accent-color: var(-
   .stat { border-bottom: 1px solid var(--border); }
   .stat:nth-child(2n) { border-right: none; }
   .stat:nth-last-child(-n+2) { border-bottom: none; }
+  /* a 170px sidebar can't hold label + chip on one line — the board is still
+     named in the ⚙ settings and on the confirm step */
+  .js-board-tag { display: none; }
 }
 @media (max-width: 620px) {
   .stats { grid-template-columns: 1fr; }
