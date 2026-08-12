@@ -241,6 +241,15 @@ Same ~1,900-line vanilla SPA, new data layer. State in one `S` object.
 - KPI row = one `GET /api/counts` (was ~26 requests). `--cat-1..8` are the
   validated categorical slots (light+dark, CVD-checked against this app's own
   surfaces); the Team activity chart uses all 8, folding a 9th person into grey.
+- **The KPI tiles are work queues, and clicking one filters the list.** Four
+  tiles — Ready to work (has phone, still New), Needs enrichment (no phone and
+  no email), Unassigned (no owner), New this week (+ delta vs the previous 7
+  days). Each arms `S.focus`, which rides along with whatever tab you are on
+  (`?focus=` → `FOCUS` in `leads.js`); clicking the armed tile clears it.
+  **The tile's count and the list it opens are the same predicate, written
+  twice** — `FOCUS` in `server/leads.js`, the FILTER clauses in
+  `server/counts.js`, and `FOCUS_TEST` in `app.js` for the Recent tab's local
+  paging. Change one, change all three, or a tile will say 412 and open 380.
 - Design rules that survived the migration: states display in full
   (`fullState()`); drawn SVG icons in the nav, not emoji; shallow corner radii;
   `color-scheme` on `:root` for native controls; **bump `?v=` on every

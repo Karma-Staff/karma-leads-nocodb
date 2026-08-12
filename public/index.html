@@ -7,7 +7,7 @@
 <!-- geometric K, drawn rather than typeset, so it matches the mark in the app -->
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%232f54eb'/><path d='M11 7.5v17M11 16l9.5-8.5M11 16l9.5 8.5' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round' fill='none'/></svg>">
 <!-- bump ?v= whenever app.js/app.css change so no one gets a half-old app -->
-<link rel="stylesheet" href="app.css?v=24">
+<link rel="stylesheet" href="app.css?v=25">
 </head>
 <body>
 
@@ -66,38 +66,51 @@
     </div>
   </header>
 
-  <!-- KPI row: value + a meter/composition bar per tile, filled by runCounts() -->
+  <!-- KPI row: four work queues, not vanity totals. Each tile is a button that
+       filters the list to exactly the rows it counted (?focus= in leads.js);
+       the numbers come from one /api/counts pass and are filled by runCounts().
+       Clicking an armed tile clears it. -->
   <div class="stats" id="stats">
-    <div class="stat">
-      <div class="stat-label">Total leads</div>
-      <div class="stat-value" id="stat-total">–</div>
-      <div class="stat-viz" id="viz-total"></div>
-    </div>
-    <div class="stat">
-      <div class="stat-label">Phone numbers</div>
-      <div class="stat-value" id="stat-phone">–</div>
-      <div class="stat-viz" id="viz-phone"></div>
-    </div>
-    <div class="stat">
-      <div class="stat-label">Email addresses</div>
-      <div class="stat-value" id="stat-email">–</div>
-      <div class="stat-viz" id="viz-email"></div>
-    </div>
-    <div class="stat">
-      <div class="stat-label">Contacted</div>
-      <div class="stat-value" id="stat-contacted">–</div>
-      <div class="stat-viz" id="viz-contacted"></div>
-    </div>
-    <div class="stat">
-      <div class="stat-label">Qualified</div>
-      <div class="stat-value" id="stat-qualified">–</div>
-      <div class="stat-viz" id="viz-qualified"></div>
-    </div>
-    <div class="stat">
-      <div class="stat-label">New this week</div>
-      <div class="stat-value" id="stat-week">–</div>
+    <button type="button" class="stat" data-focus="ready" aria-pressed="false"
+            title="Leads you can call right now — filter the list to them">
+      <div class="stat-label"><i class="tile-dot t-ready"></i>Ready to work</div>
+      <div class="stat-row">
+        <div class="stat-value" id="stat-ready">–</div>
+        <div class="stat-side" id="side-ready"></div>
+      </div>
+      <div class="stat-viz" id="viz-ready"></div>
+      <div class="stat-sub">Has phone · never contacted</div>
+    </button>
+    <button type="button" class="stat" data-focus="enrich" aria-pressed="false"
+            title="Leads nobody can contact — filter the list to them">
+      <div class="stat-label"><i class="tile-dot t-enrich"></i>Needs enrichment</div>
+      <div class="stat-row">
+        <div class="stat-value" id="stat-enrich">–</div>
+        <div class="stat-side" id="side-enrich"></div>
+      </div>
+      <div class="stat-viz" id="viz-enrich"></div>
+      <div class="stat-sub">No phone or email</div>
+    </button>
+    <button type="button" class="stat" data-focus="unassigned" aria-pressed="false"
+            title="Leads with nobody on them — filter the list to them">
+      <div class="stat-label"><i class="tile-dot t-unassigned"></i>Unassigned</div>
+      <div class="stat-row">
+        <div class="stat-value" id="stat-unassigned">–</div>
+        <div class="stat-side" id="side-unassigned"></div>
+      </div>
+      <div class="stat-viz" id="viz-unassigned"></div>
+      <div class="stat-sub">No owner set</div>
+    </button>
+    <button type="button" class="stat" data-focus="week" aria-pressed="false"
+            title="Everything added in the last 7 days — filter the list to it">
+      <div class="stat-label"><i class="tile-dot t-week"></i>New this week</div>
+      <div class="stat-row">
+        <div class="stat-value" id="stat-week">–</div>
+        <div class="stat-side" id="side-week"></div>
+      </div>
       <div class="stat-viz" id="viz-week"></div>
-    </div>
+      <div class="stat-sub" id="sub-week">Last 7 days</div>
+    </button>
   </div>
 
   <div class="main">
@@ -250,6 +263,6 @@
   </div>
 </div>
 
-<script src="app.js?v=25"></script>
+<script src="app.js?v=26"></script>
 </body>
 </html>

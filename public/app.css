@@ -7,7 +7,7 @@
      a white popup behind near-white option text */
   color-scheme: light;
 
-  /* categorical slots for the composition bar and the Team activity chart,
+  /* categorical slots for the KPI tiles and the Team activity chart,
      validated for CVD separation against this app's own surfaces
      (#fff light / #1e2023 dark) — all 8 pass the palette validator's
      lightness/chroma/CVD/normal-vision checks in fixed order */
@@ -162,51 +162,105 @@ a:hover { text-decoration: underline; }
 .dropdown-item:hover { background: var(--surface-2); text-decoration: none; }
 
 /* ---------- KPI row ----------
-   One bordered strip of hairline-separated cells rather than floating cards:
-   denser, and the shared edges make it read as a single instrument panel. */
+   Four work queues, not vanity totals. Still one bordered strip of
+   hairline-separated cells rather than floating cards — denser, and the shared
+   edges make it read as a single instrument panel — but every cell is now a
+   button that filters the list to the rows it counted. Each tile owns a hue
+   (--tile, from the CVD-validated categorical slots) carried by its dot, its
+   meter fill and, when armed, its top rule: the same colour means the same
+   queue whether you are reading the number or looking at the filter you set. */
 .stats {
-  display: grid; grid-template-columns: repeat(6, 1fr);
+  display: grid; grid-template-columns: repeat(4, 1fr);
   margin: 0 20px 12px;
   background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden;
 }
 .stat {
-  padding: 8px 13px 9px; min-width: 0;
+  position: relative; display: block; width: 100%; text-align: left;
+  padding: 9px 13px 10px; min-width: 0;
   border-right: 1px solid var(--border);
+  background: none; cursor: pointer;
+  transition: background .12s ease;
 }
 .stat:last-child { border-right: none; }
+/* the armed rule sits in a pseudo-element so turning a filter on never shifts
+   the row's height by a pixel */
+.stat::before {
+  content: ""; position: absolute; inset: 0 0 auto 0; height: 2px;
+  background: var(--tile); opacity: 0; transition: opacity .12s ease;
+}
+.stat:hover { background: var(--surface-2); }
+.stat:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.stat.armed { background: var(--surface-2); }
+.stat.armed::before { opacity: 1; }
+.stat.armed .stat-value { color: var(--tile); }
+
 .stat-label {
+  display: flex; align-items: center; gap: 5px;
   font-size: 10.5px; font-weight: 600; text-transform: uppercase;
   letter-spacing: .05em; color: var(--ink-3);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+.tile-dot {
+  flex: none; width: 7px; height: 7px; border-radius: 2px; background: var(--tile);
+}
+/* one hue per queue, so the tile, its meter and its armed rule agree */
+.stat[data-focus="ready"]      { --tile: var(--cat-3); }
+.stat[data-focus="enrich"]     { --tile: var(--cat-4); }
+.stat[data-focus="unassigned"] { --tile: var(--cat-7); }
+.stat[data-focus="week"]       { --tile: var(--cat-1); }
+
+/* value and its secondary figure share a baseline: the eye reads "12,483 · 34%"
+   as one statement rather than two stacked ones */
+.stat-row { display: flex; align-items: baseline; gap: 8px; }
 /* proportional figures on purpose — tabular-nums looks loose at this size */
 .stat-value { font-size: 20px; font-weight: 650; line-height: 1.3; }
-.stat-viz { margin-top: 5px; }
-.stat-note {
-  font-size: 10.5px; color: var(--ink-3); margin-top: 4px;
+.stat-side {
+  margin-left: auto; font-size: 11px; font-weight: 600; color: var(--ink-3);
+  white-space: nowrap;
+}
+.stat-viz { margin-top: 6px; }
+.stat-sub {
+  font-size: 10.5px; color: var(--ink-3); margin-top: 5px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.stat-note b { color: var(--ink-2); font-weight: 600; }
+.stat-sub b { color: var(--ink-2); font-weight: 600; }
 
-/* ratio-against-a-whole meter: track is a lighter step of the fill's own
-   ramp (blue on blue), so the state reads across the entire bar */
-.meter { height: 5px; border-radius: 3px; background: var(--accent-soft); overflow: hidden; }
-.meter > span { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+/* ratio-against-a-whole meter, tinted to the tile's own hue: the track is a
+   wash of the same colour so the state reads across the entire bar */
+.meter {
+  height: 5px; border-radius: 3px; overflow: hidden;
+  background: var(--accent-soft);                          /* pre-color-mix */
+  background: color-mix(in srgb, var(--tile, var(--accent)) 16%, transparent);
+}
+.meter > span {
+  display: block; height: 100%; border-radius: 3px;
+  background: var(--tile, var(--accent));
+  transition: width .35s cubic-bezier(.22,.61,.36,1);      /* counts animate in */
+}
 .meter.is-empty > span { background: var(--ink-3); opacity: .35; }
 
-/* composition bar — 2px surface gaps keep adjacent fills legible */
-.compo {
-  display: flex; gap: 2px; height: 5px;
-  border-radius: 3px; overflow: hidden; background: var(--surface);
+/* week tile: two bars (previous 7 days, then this week) instead of a meter —
+   a week's intake against 35k would be a permanently empty ratio bar, but
+   against last week it is the comparison the delta is actually claiming */
+.spark { display: flex; align-items: flex-end; gap: 4px; height: 16px; }
+.spark > span {
+  flex: 1; min-height: 2px; border-radius: 2px 2px 0 0;
+  background: var(--ink-3); opacity: .35;
 }
-.compo > span { display: block; height: 100%; border-radius: 3px; min-width: 2px; }
+.spark > span.now { background: var(--tile); opacity: 1; }
 .dot {
   display: inline-block; width: 7px; height: 7px; border-radius: 2px;
   margin-right: 3px; vertical-align: baseline;
 }
-.delta { font-weight: 600; }
-.delta.up { color: var(--good); }
+/* the direction is written in the arrow as well as the colour — a red/green
+   pill alone would be the only carrier of meaning for a CVD reader */
+.delta {
+  font-weight: 600; border-radius: 999px; padding: 1px 6px;
+  background: var(--surface-2); border: 1px solid var(--border); color: var(--ink-2);
+}
+.delta.up   { color: var(--good);  border-color: color-mix(in srgb, var(--good) 35%, var(--border)); }
+.delta.down { color: var(--cat-2); border-color: color-mix(in srgb, var(--cat-2) 35%, var(--border)); }
 
 /* ---------- main 3-pane ---------- */
 .main {
@@ -1008,16 +1062,15 @@ label.check input[type="checkbox"] { width: auto; margin: 0; accent-color: var(-
 @media (max-width: 1080px) {
   .main { grid-template-columns: 170px 1fr; grid-template-rows: 1fr 1fr; }
   .sidebar { grid-row: span 2; }
-  .stats { grid-template-columns: repeat(3, 1fr); }
-  /* wrapped rows need their own separators, and row 1 loses its right edge */
+  /* four tiles wrap to 2×2: the wrapped row needs its own separators, and the
+     tiles ending each row lose their right edge */
+  .stats { grid-template-columns: repeat(2, 1fr); }
   .stat { border-bottom: 1px solid var(--border); }
-  .stat:nth-child(3n) { border-right: none; }
-  .stat:nth-last-child(-n+3) { border-bottom: none; }
+  .stat:nth-child(2n) { border-right: none; }
+  .stat:nth-last-child(-n+2) { border-bottom: none; }
 }
 @media (max-width: 620px) {
-  .stats { grid-template-columns: repeat(2, 1fr); }
-  .stat:nth-child(3n) { border-right: 1px solid var(--border); }
-  .stat:nth-child(2n) { border-right: none; }
-  .stat:nth-last-child(-n+3) { border-bottom: 1px solid var(--border); }
-  .stat:nth-last-child(-n+2) { border-bottom: none; }
+  .stats { grid-template-columns: 1fr; }
+  .stat { border-right: none; }
+  .stat:last-child { border-bottom: none; }
 }

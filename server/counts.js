@@ -26,6 +26,17 @@ router.get("/api/counts", requireUser, async (req, res, next) => {
         count(*) FILTER (WHERE status = 'Qualified' AND NOT removed)::int AS qualified,
         count(*) FILTER (WHERE phone IS NOT NULL AND NOT removed)::int AS with_phone,
         count(*) FILTER (WHERE email IS NOT NULL AND NOT removed)::int AS with_email,
+        /* the three work-queue tiles. They are deliberately the same
+           predicates as FOCUS in leads.js — the KPI number and the list you
+           get by clicking it must never disagree. Blank strings count as
+           missing: the importers write '' as readily as NULL. */
+        count(*) FILTER (WHERE NOT removed AND status = 'New'
+                         AND nullif(btrim(phone), '') IS NOT NULL)::int AS ready,
+        count(*) FILTER (WHERE NOT removed
+                         AND nullif(btrim(phone), '') IS NULL
+                         AND nullif(btrim(email), '') IS NULL)::int     AS needs_enrichment,
+        count(*) FILTER (WHERE NOT removed
+                         AND nullif(btrim(owner), '') IS NULL)::int     AS unassigned,
         count(*) FILTER (WHERE date_added >= current_date - 6
                          AND NOT removed)::int                         AS week,
         count(*) FILTER (WHERE date_added >= current_date - 13

@@ -8,6 +8,7 @@ const S = {
   q: "",
   status: "",
   state: "",           // two-letter code, "" = everywhere
+  focus: "",           // armed KPI tile: ready | enrich | unassigned | week
   sort: "recent",
   list: [],
   page: 1,             // 1-based
@@ -192,24 +193,60 @@ function compact(n) {
 }
 const pct = (n, total) => total > 0 ? (n / total) * 100 : 0;
 
-function setStat(id, value, vizHtml, note) {
+/* ---------------- the KPI tiles ----------------
+   Four work queues, each one clickable. The tile's number and the list you get
+   by clicking it are the same predicate (FOCUS in server/leads.js), so a tile
+   is a to-do count you can act on rather than a statistic you read past. */
+const FOCUS_LABEL = {
+  ready: "Ready to work",
+  enrich: "Needs enrichment",
+  unassigned: "Unassigned",
+  week: "New this week",
+};
+
+function setTile(id, value, sideHtml, vizHtml) {
   const v = $("stat-" + id);
   if (v) {
     v.textContent = compact(value);
     v.title = value.toLocaleString() + " leads";
   }
+  const s = $("side-" + id);
+  if (s) s.innerHTML = sideHtml || "";
   const z = $("viz-" + id);
-  if (z) z.innerHTML = (vizHtml || "") +
-    (note ? `<div class="stat-note">${note}</div>` : "");
+  if (z) z.innerHTML = vizHtml || "";
 }
 
-/* a ratio against the whole, as a meter + its own written-out label (the
-   percentage is never carried by bar length alone) */
-function meterStat(id, value, total, noun) {
+/* a queue as a share of the live base: the meter plus the percentage written
+   out, so the ratio is never carried by bar length alone */
+function queueTile(id, value, total) {
   const p = pct(value, total);
-  setStat(id, value,
-    `<div class="meter${value ? "" : " is-empty"}"><span style="width:${p.toFixed(1)}%"></span></div>`,
-    `<b>${p < 1 && p > 0 ? "<1" : Math.round(p)}%</b> of ${noun}`);
+  setTile(id, value,
+    `${p > 0 && p < 1 ? "<1" : Math.round(p)}% of base`,
+    `<div class="meter${value ? "" : " is-empty"}"><span style="width:${p.toFixed(1)}%"></span></div>`);
+}
+
+/* S.focus is an overlay filter like S.status/S.state: it rides along with
+   whichever tab you are on, so arming "Unassigned" inside Companies means
+   unassigned companies. The armed tile is the filter's only control — click it
+   again to clear. */
+function paintTiles() {
+  document.querySelectorAll(".stat[data-focus]").forEach((b) => {
+    const on = b.dataset.focus === S.focus;
+    b.classList.toggle("armed", on);
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+}
+
+function toggleFocus(key) {
+  if (!FOCUS_LABEL[key]) return;
+  S.focus = S.focus === key ? "" : key;
+  paintTiles();
+  // Team activity reads the log, not the leads table — there is no list there
+  // to filter, so arming a queue from it means "show me those leads"
+  if (S.focus && TABS[S.tab].stats) return setTab("companies");
+  const list = $("lead-list");
+  if (list) list.scrollTop = 0;
+  loadList(true);
 }
 
 let countsPending = false;
@@ -233,34 +270,36 @@ async function runCounts() {
   $("count-removed").textContent = c.removed.toLocaleString();
   // ("Recent" is the activity trail — its badge comes from S.recents)
 
-  // total: what the base is made of, as one composition bar
-  const seg = (n, hue, label) => n
-    ? `<span style="width:${pct(n, total).toFixed(2)}%; background:var(--${hue})"
-        title="${n.toLocaleString()} ${label}"></span>` : "";
-  setStat("total", total,
-    `<div class="compo">${seg(c.companies, "cat-1", "companies")}${seg(c.people, "cat-2", "people")}${seg(c.jobs, "cat-3", "jobs")}</div>`,
-    `<i class="dot" style="background:var(--cat-1)"></i>${compact(c.companies)}
-     <i class="dot" style="background:var(--cat-2)"></i>${compact(c.people)}
-     <i class="dot" style="background:var(--cat-3)"></i>${compact(c.jobs)}`);
+  // the three work queues, each as a count + its share of the live base
+  queueTile("ready", c.ready, total);
+  queueTile("enrich", c.needs_enrichment, total);
+  queueTile("unassigned", c.unassigned, total);
 
-  meterStat("phone", c.with_phone, total, "leads");
-  meterStat("email", c.with_email, total, "leads");
-  meterStat("contacted", total - c.status_new, total, "leads worked");
-  meterStat("qualified", c.qualified, total, "leads");
-
-  // new-this-week carries a delta against the 7 days before it, not a meter:
-  // a week's intake as a share of 35k would be a permanently empty bar
-  // a percentage off a near-zero prior week is noise ("↑8000%" for 1 -> 81),
-  // so only show one when the baseline is big enough to mean anything
-  const wk = c.week, prev = c.prev_week;
+  // new-this-week gets a two-bar comparison, not a share meter: a week's
+  // intake against 35k would be a permanently empty bar, while against the
+  // previous 7 days it is the comparison the delta is actually claiming.
+  // A percentage off a near-zero baseline is noise ("↑8000%" for 1 -> 81), so
+  // the delta only appears when the prior week is big enough to mean anything.
+  const wk = c.week, prev = c.prev_week, top = Math.max(wk, prev, 1);
   const change = prev >= 10 ? Math.round(((wk - prev) / prev) * 100) : null;
-  setStat("week", wk, "",
+  const arrow = change > 0 ? "↑" : change < 0 ? "↓" : "→";
+  const dir = change > 0 ? " up" : change < 0 ? " down" : "";
+  setTile("week", wk,
     change !== null
-      ? `<span class="delta${change > 0 ? " up" : ""}">${change > 0 ? "↑" : "↓"}
-         ${Math.abs(change)}%</span> vs previous 7 days`
-      : wk
-        ? `prior 7 days: <b>${prev.toLocaleString()}</b>`
-        : "nothing added in 7 days");
+      ? `<span class="delta${dir}">${arrow} ${Math.abs(change)}%</span>` : "",
+    `<div class="spark">
+       <span style="height:${((prev / top) * 100).toFixed(1)}%"
+             title="previous 7 days: ${prev.toLocaleString()}"></span>
+       <span class="now" style="height:${((wk / top) * 100).toFixed(1)}%"
+             title="this week: ${wk.toLocaleString()}"></span>
+     </div>`);
+  const sub = $("sub-week");
+  if (sub) sub.innerHTML = change !== null
+    ? `vs <b>${prev.toLocaleString()}</b> the previous 7 days`
+    : wk ? `previous 7 days: <b>${prev.toLocaleString()}</b>`
+         : "nothing added in 7 days";
+
+  paintTiles();
 }
 
 /* ---------------- recents (the leads this account touched) ----------------
@@ -305,7 +344,24 @@ function touchLead(item) {
 
 /* The trail is 50 rows and already in the right order, so its search, status
    and state filters run here instead of as a where clause. */
+/* The Recent tab pages its ≤50-row trail locally, so the armed tile has to be
+   re-implemented client-side. Keep these in step with FOCUS in server/leads.js
+   — same rule, two runtimes, exactly like the dedupe guards. */
+const filled = (v) => !!String(v ?? "").trim();
+const daysAgo = (n) => {                    // local YYYY-MM-DD, matching date_added
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+const FOCUS_TEST = {
+  ready:      (r) => filled(r.Phone) && (r.Status || "New") === "New",
+  enrich:     (r) => !filled(r.Phone) && !filled(r.Email),
+  unassigned: (r) => !filled(r.Owner),
+  week:       (r) => !!r["Date Added"] && r["Date Added"] >= daysAgo(6),
+};
+
 function matchesFilters(r) {
+  if (S.focus && !FOCUS_TEST[S.focus](r)) return false;
   if (S.status && (r.Status || "New") !== S.status) return false;
   if (S.state) {
     const st = String(r.State || "").trim().toLowerCase();
@@ -341,6 +397,7 @@ function listParams() {
   }
   if (S.q) p.set("q", S.q);
   if (S.status) p.set("status", S.status);
+  if (S.focus) p.set("focus", S.focus);          // an armed KPI tile
   p.set("sort", sortUsable(S.sort, S.tab) ? S.sort : "recent");
   p.set("limit", S.pageSize);
   const cur = S.cursors[S.page - 1];
@@ -373,8 +430,11 @@ async function loadList(resetPage = false) {
   const cfg = TABS[S.tab];
   // Team activity reads the log, not the leads table — no list, no pager
   if (cfg.stats) return loadStats();
-  $("list-title").textContent = cfg.segment
-    ? (S.segment?.label || "Segment") : cfg.title;
+  // the armed tile is named in the header too: a list that is short because a
+  // KPI tile is filtering it should never look like a list that is just short
+  $("list-title").textContent =
+    (cfg.segment ? (S.segment?.label || "Segment") : cfg.title)
+    + (S.focus ? ` · ${FOCUS_LABEL[S.focus]}` : "");
 
   if (cfg.activity) {
     // 50 rows at most: refetch the trail, filter and page locally
@@ -2015,6 +2075,9 @@ function wire() {
     b.addEventListener("click", () => setTab(b.dataset.tab)));
   document.querySelectorAll("[data-density]").forEach((b) =>
     b.addEventListener("click", () => setDensity(b.dataset.density)));
+  // the KPI tiles are the filter control for the queues they count
+  document.querySelectorAll(".stat[data-focus]").forEach((b) =>
+    b.addEventListener("click", () => toggleFocus(b.dataset.focus)));
   wireSplitter();
   let debounce;
   on("search", "input", (e) => {

@@ -17,6 +17,7 @@ const express = require("express");
 const { query, tx } = require("./db");
 const { requireUser } = require("./auth");
 const activity = require("./activity");
+const counts = require("./counts");
 const { STATUSES } = require("./dedupe");
 
 const router = express.Router();
@@ -52,6 +53,17 @@ const SORTS = {
   state: ["state", "ASC"], city: ["city", "ASC"], status: ["status", "ASC"],
 };
 
+/* The KPI tiles are work queues, not decoration: each one is clickable and
+   lands here as ?focus=. Keep these predicates identical to the FILTER clauses
+   in counts.js — a tile that says 412 and opens 380 rows is worse than no tile.
+   Blank strings count as missing (importers write '' as readily as NULL). */
+const FOCUS = {
+  ready:      "status = 'New' AND nullif(btrim(phone), '') IS NOT NULL",
+  enrich:     "nullif(btrim(phone), '') IS NULL AND nullif(btrim(email), '') IS NULL",
+  unassigned: "nullif(btrim(owner), '') IS NULL",
+  week:       "date_added >= current_date - 6",
+};
+
 const enc = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
 const dec = (s) => { try { return JSON.parse(Buffer.from(s, "base64url").toString()); } catch { return null; } };
 
@@ -66,6 +78,7 @@ function buildFilters(p) {
   if (p.favorite === "true") add("favorite");
   if (STATUSES.includes(p.status)) add("status = ?", p.status);
   if (p.owner) add("owner = ?", p.owner);
+  if (FOCUS[p.focus]) add(FOCUS[p.focus]);          // a KPI tile was clicked
   if (p.state && STATE_NAME[p.state.toUpperCase()]) {
     const ab = p.state.toUpperCase();
     add("(upper(state) = ? OR state ILIKE ?)", ab, STATE_NAME[ab]);
@@ -219,6 +232,9 @@ router.patch("/api/leads/:id", express.json({ limit: "8kb" }), async (req, res, 
       return updated;
     });
     if (!row) return res.status(404).json({ error: "no such lead" });
+    // the KPI tiles are work queues now: taking a lead off New, or giving it an
+    // owner, empties one of them. A 30s stale read would look like a lost click.
+    counts.invalidate();
     res.json(row);
   } catch (e) { next(e); }
 });
@@ -271,6 +287,7 @@ router.post("/api/leads/:id/remove", express.json({ limit: "8kb" }), async (req,
       return { affected: ids.length, ids };
     });
     if (!out) return res.status(404).json({ error: "no such lead" });
+    counts.invalidate();                 // a sweep moves every tile at once
     res.json(out);
   } catch (e) { next(e); }
 });
@@ -300,6 +317,7 @@ router.post("/api/leads/:id/restore", express.json({ limit: "8kb" }), async (req
       return { ok: true, affected };
     });
     if (!out) return res.status(404).json({ error: "no such lead" });
+    counts.invalidate();
     res.json(out);
   } catch (e) { next(e); }
 });
