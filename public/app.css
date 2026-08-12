@@ -171,13 +171,13 @@ a:hover { text-decoration: underline; }
    queue whether you are reading the number or looking at the filter you set. */
 .stats {
   display: grid; grid-template-columns: repeat(4, 1fr);
-  margin: 0 20px 12px;
+  margin: 0 20px 10px;
   background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden;
 }
 .stat {
   position: relative; display: block; width: 100%; text-align: left;
-  padding: 9px 13px 10px; min-width: 0;
+  padding: 6px 12px 7px; min-width: 0;
   border-right: 1px solid var(--border);
   background: none; cursor: pointer;
   transition: background .12s ease;
@@ -197,7 +197,7 @@ a:hover { text-decoration: underline; }
 
 .stat-label {
   display: flex; align-items: center; gap: 5px;
-  font-size: 10.5px; font-weight: 600; text-transform: uppercase;
+  font-size: 10px; font-weight: 600; line-height: 1.4; text-transform: uppercase;
   letter-spacing: .05em; color: var(--ink-3);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
@@ -214,14 +214,14 @@ a:hover { text-decoration: underline; }
    as one statement rather than two stacked ones */
 .stat-row { display: flex; align-items: baseline; gap: 8px; }
 /* proportional figures on purpose — tabular-nums looks loose at this size */
-.stat-value { font-size: 20px; font-weight: 650; line-height: 1.3; }
+.stat-value { font-size: 17px; font-weight: 650; line-height: 1.2; }
 .stat-side {
   margin-left: auto; font-size: 11px; font-weight: 600; color: var(--ink-3);
   white-space: nowrap;
 }
-.stat-viz { margin-top: 6px; }
+.stat-viz { margin-top: 3px; }
 .stat-sub {
-  font-size: 10.5px; color: var(--ink-3); margin-top: 5px;
+  font-size: 10px; line-height: 1.35; color: var(--ink-3); margin-top: 3px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .stat-sub b { color: var(--ink-2); font-weight: 600; }
@@ -229,7 +229,7 @@ a:hover { text-decoration: underline; }
 /* ratio-against-a-whole meter, tinted to the tile's own hue: the track is a
    wash of the same colour so the state reads across the entire bar */
 .meter {
-  height: 5px; border-radius: 3px; overflow: hidden;
+  height: 4px; border-radius: 2px; overflow: hidden;
   background: var(--accent-soft);                          /* pre-color-mix */
   background: color-mix(in srgb, var(--tile, var(--accent)) 16%, transparent);
 }
@@ -240,15 +240,18 @@ a:hover { text-decoration: underline; }
 }
 .meter.is-empty > span { background: var(--ink-3); opacity: .35; }
 
-/* week tile: two bars (previous 7 days, then this week) instead of a meter —
+/* Week tile: two bars (previous 7 days, then this week) instead of a meter —
    a week's intake against 35k would be a permanently empty ratio bar, but
-   against last week it is the comparison the delta is actually claiming */
-.spark { display: flex; align-items: flex-end; gap: 4px; height: 16px; }
-.spark > span {
+   against last week it is the comparison the delta is actually claiming.
+   SCOPED to the tile: the job-search usage card has its own .spark (an <svg>,
+   54px tall) and the two were colliding — the taller one won and stretched
+   this whole row. Keep both selectors scoped so neither can reach the other. */
+.stat-viz .spark { display: flex; align-items: flex-end; gap: 4px; height: 10px; }
+.stat-viz .spark > span {
   flex: 1; min-height: 2px; border-radius: 2px 2px 0 0;
   background: var(--ink-3); opacity: .35;
 }
-.spark > span.now { background: var(--tile); opacity: 1; }
+.stat-viz .spark > span.now { background: var(--tile); opacity: 1; }
 .dot {
   display: inline-block; width: 7px; height: 7px; border-radius: 2px;
   margin-right: 3px; vertical-align: baseline;
@@ -1057,8 +1060,8 @@ body.dragging #import-btn { outline: 3px solid var(--accent-soft); }
 }
 .usage-fill { height: 100%; background: var(--accent); border-radius: 3px; }
 .usage-fill.hot { background: #b3261e; }
-.spark { display: block; width: 100%; height: 54px; }
-.spark rect { fill: var(--accent); opacity: .85; }
+.usage-card .spark { display: block; width: 100%; height: 54px; }
+.usage-card .spark rect { fill: var(--accent); opacity: .85; }
 .usage-caption { font-size: 11px; color: var(--ink-3); margin-top: 4px; }
 
 .js-two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
