@@ -396,7 +396,8 @@ a:hover { text-decoration: underline; }
   color: var(--ink-3); font-style: italic;
   max-width: 130px; overflow: hidden; text-overflow: ellipsis;
 }
-.fact-reach { gap: 5px; color: var(--ink-3); font-size: 12px; }
+.lead-reach { display: flex; gap: 6px; color: var(--ink-2); font-size: 13px; line-height: 1; }
+.lead-reach .reach-ic.off { color: var(--ink-3); opacity: .3; }
 .size-tag {
   font-size: 10.5px; font-weight: 700; letter-spacing: .02em;
   border-radius: 5px; padding: 1px 5px; margin-left: 3px;
@@ -492,6 +493,7 @@ body.d-compact .lead-name { font-size: 13px; }
 body.d-compact .lead-facts { margin-top: 1px; font-size: 11.5px; }
 body.d-compact .lead-side { flex-direction: row; align-items: center; gap: 8px; }
 body.d-compact .lead-date { font-size: 11px; }
+body.d-compact .lead-reach { font-size: 12px; }
 
 /* cozy (default): avatar + facts, status as a dot instead of a chip row */
 body.d-cozy .lead-row { padding: 7px 14px; }

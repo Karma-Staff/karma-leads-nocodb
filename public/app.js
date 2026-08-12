@@ -520,11 +520,16 @@ function factsHtml(r) {
   if (r.Certs > 0)
     out.push(`<span class="fact" title="certifications on file"><span class="fact-ic">🏅</span>${r.Certs} cert${r.Certs > 1 ? "s" : ""}</span>`);
   if (r.Industry) out.push(`<span class="fact fact-industry">${esc(titleCase(r.Industry))}</span>`);
-  const reach = [];
-  if (r.Email) reach.push('<span title="has email">✉</span>');
-  if (r.Phone) reach.push('<span title="has phone">☎</span>');
-  if (reach.length) out.push(`<span class="fact fact-reach">${reach.join("")}</span>`);
   return out.length ? `<div class="lead-facts">${out.join("")}</div>` : "";
+}
+
+/* bulk imports gave most of the base the same Date Added, so the list column
+   shows reachability instead — both slots always render so absence is visible */
+function reachHtml(r) {
+  return `<span class="lead-reach">` +
+    `<span class="reach-ic${r.Email ? "" : " off"}" title="${r.Email ? "has email" : "no email"}">✉</span>` +
+    `<span class="reach-ic${r.Phone ? "" : " off"}" title="${r.Phone ? "has phone" : "no phone"}">☎</span>` +
+    `</span>`;
 }
 
 function renderList() {
@@ -534,9 +539,10 @@ function renderList() {
     // jobs carry the company in the subtitle instead, so the title stays readable
     const co = r._t === "people" && r.Company && r.Company !== name
       ? ` <span class="co">· ${esc(r.Company)}</span>` : "";
-    // in the activity trail the useful timestamp is when it was touched,
-    // not when it was imported
-    const date = r._touchedAt || r[TABS[r._t].dateField];
+    // the activity trail's touched-at and a job's posting date are real
+    // information; an import date is one bulk-load day — show reach instead
+    const date = r._touchedAt || (r._t === "jobs" ? r[TABS[r._t].dateField] : "");
+    const side = date ? `<span class="lead-date">${relTime(date)}</span>` : reachHtml(r);
     const sel = S.sel && S.sel.row.Id === r.Id && S.sel.tkey === r._t ? " selected" : "";
     return `
     <div class="lead-row${sel}" data-i="${i}">
@@ -550,7 +556,7 @@ function renderList() {
       <div class="lead-side">
         <button class="fav-star${r.Favorite ? " on" : ""}" data-fav="${i}"
                 title="${r.Favorite ? "Remove from favorites" : "Add to favorites"}">★</button>
-        <span class="lead-date">${relTime(date)}</span>
+        ${side}
       </div>
     </div>`;
   }).join("") || `<div class="detail-empty" style="height:200px"><p>${
