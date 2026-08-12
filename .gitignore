@@ -44,3 +44,6 @@ __pycache__/
 npm-debug.log*
 .DS_Store
 Thumbs.db
+
+# Claude Code session worktrees — never part of the app
+.claude/
