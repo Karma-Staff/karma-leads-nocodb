@@ -1011,14 +1011,13 @@ body.dragging #import-btn { outline: 3px solid var(--accent-soft); }
 /* ---------- job search (LinkedIn / Indeed / Google Jobs) ---------- */
 /* the board picker doubles as a mode switch: each board hides the controls it
    cannot use — .li-only is LinkedIn's filter set, .in-only is Indeed's boolean
-   searches, .g-only is Google's one-line query, and .no-in is the pair the two
-   query-line boards share (the results cap). Every board's own rows are named
-   positively; nothing is left visible by omission. */
+   searches, .g-only is Google's one-line query, and .no-in is the results cap
+   LinkedIn and Google share (Indeed keeps its own, larger one). Every board's
+   own rows are named positively; nothing is left visible by omission. */
 #js-form:not(.js-linkedin) .li-only { display: none; }
 #js-form:not(.js-indeed) .in-only { display: none; }
 #js-form:not(.js-google) .g-only { display: none; }
 #js-form.js-indeed .no-in { display: none; }
-#js-form.js-google .no-g { display: none; }
 /* the whole form takes the active board's brand colour, so the mode banner and
    the cost chip shift with the choice, not just the selected card */
 #js-form { --brand: #0a66c2; --brand-soft: #eaf2fb; }
