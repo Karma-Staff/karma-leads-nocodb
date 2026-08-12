@@ -7,7 +7,7 @@
 <!-- geometric K, drawn rather than typeset, so it matches the mark in the app -->
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%232f54eb'/><path d='M11 7.5v17M11 16l9.5-8.5M11 16l9.5 8.5' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round' fill='none'/></svg>">
 <!-- bump ?v= whenever app.js/app.css change so no one gets a half-old app -->
-<link rel="stylesheet" href="app.css?v=20">
+<link rel="stylesheet" href="app.css?v=21">
 </head>
 <body>
 
@@ -120,14 +120,16 @@
       <button class="nav-item" data-tab="favorites">
         <svg class="nav-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 4.3 2.42 4.9 5.41.79-3.92 3.81.93 5.39L12 16.65 7.16 19.19l.93-5.39-3.92-3.81 5.41-.79L12 4.3Z"/></svg>
         Favorites <span class="nav-count" id="count-favorites"></span></button>
-      <button class="nav-item" data-tab="removed">
-        <svg class="nav-ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.2"/><path d="m6.2 6.2 11.6 11.6"/></svg>
-        Removed <span class="nav-count" id="count-removed"></span></button>
 
       <div class="nav-section admin-only hidden">Manage</div>
       <button class="nav-item admin-only hidden" data-tab="stats">
         <svg class="nav-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V4M4 20h16M7.6 20v-5.2M12 20V9.4M16.4 20v-7.8"/></svg>
         Team activity</button>
+      <!-- Removed lives under Manage now: members can still remove (with a
+           5-second undo), but only the manager reviews the ban list -->
+      <button class="nav-item admin-only hidden" data-tab="removed">
+        <svg class="nav-ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.2"/><path d="m6.2 6.2 11.6 11.6"/></svg>
+        Removed <span class="nav-count" id="count-removed"></span></button>
 
       <div class="sidebar-foot">
         <div class="job-search-row admin-only hidden">
@@ -228,6 +230,13 @@
 
 <div id="toast" class="toast hidden"></div>
 
+<!-- undo toast: bottom right, 5 seconds — a member's only way back from an
+     accidental remove, since the Removed tab is admin-only now -->
+<div id="undo-toast" class="undo-toast hidden">
+  <span id="undo-msg"></span>
+  <button id="undo-btn" class="undo-btn">Undo</button>
+</div>
+
 <!-- ============ MODAL (import / remove) ============ -->
 <div id="modal-backdrop" class="modal-backdrop hidden">
   <div class="modal">
@@ -236,6 +245,6 @@
   </div>
 </div>
 
-<script src="app.js?v=21"></script>
+<script src="app.js?v=22"></script>
 </body>
 </html>

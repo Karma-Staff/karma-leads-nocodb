@@ -31,7 +31,8 @@ const TABS = {
   // account actually touched, newest first. Starts empty for a new account.
   recent:    { title: "Recent activity", activity: true },
   favorites: { title: "Favorites", favorite: true },
-  removed:   { title: "Removed",   removedTab: true },
+  // admin-only under Manage: members remove with a 5s undo instead of a tab
+  removed:   { title: "Removed",   removedTab: true, admin: true },
   // admin-only, and not a list of leads at all: the team's action log
   stats:     { title: "Team activity", stats: true, admin: true },
   // not in the sidebar: entered by clicking a segment tag in the reading pane
@@ -792,10 +793,10 @@ async function toggleFavorite(item) {
 /* ban a number: the server blocklists it and sweeps every lead sharing it,
    in one transaction, and logs who did it and how many leads it took down */
 async function removeLead(r, reason) {
-  const out = await api(`/api/leads/${r.Id}/remove`, {
+  // {affected, ids} — ids are the exact sweep, so an undo can hand them back
+  return api(`/api/leads/${r.Id}/remove`, {
     method: "POST", body: JSON.stringify({ reason: reason || "" }),
   });
-  return out.affected;
 }
 
 async function restoreLead(r) {
@@ -1580,9 +1581,12 @@ async function openRemoveModal(r) {
     const btn = e.target.querySelector(".btn-danger");
     btn.disabled = true; btn.textContent = "Removing…";
     try {
-      const removed = await removeLead(r, reason);
+      const out = await removeLead(r, reason);
       closeModal();
-      toast(`Removed ${removed} lead${removed === 1 ? "" : "s"}${key ? ` · ${phone} banned` : ""}`);
+      const msg = `Removed ${out.affected} lead${out.affected === 1 ? "" : "s"}${key ? ` · ${phone} banned` : ""}`;
+      // a member has no Removed tab to dig a slip out of — give them 5s to undo
+      if (S.me?.role === "admin") toast(msg);
+      else showUndo(msg, r.Id, out.ids);
       S.sel = null;
       $("detail").classList.add("hidden");
       $("detail-empty").classList.remove("hidden");
@@ -1737,6 +1741,31 @@ function toast(msg) {
   el.classList.remove("hidden");
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.add("hidden"), 3500);
+}
+
+/* Undo toast (bottom right, 5 seconds): restores exactly the id set the
+   remove swept — ban lifted too. The window is deliberately short; after it
+   closes the lead is the manager's to restore from the Removed tab. */
+let undoTimer;
+function showUndo(msg, anchorId, ids) {
+  const el = $("undo-toast");
+  $("undo-msg").textContent = msg;
+  el.classList.remove("hidden");
+  clearTimeout(undoTimer);
+  undoTimer = setTimeout(() => el.classList.add("hidden"), 5000);
+  $("undo-btn").onclick = async () => {
+    clearTimeout(undoTimer);
+    el.classList.add("hidden");
+    try {
+      await api(`/api/leads/${anchorId}/restore`, {
+        method: "POST", body: JSON.stringify({ ids: ids || [] }),
+      });
+      toast("Removal undone");
+      loadList(); refreshCounts();
+    } catch (ex) {
+      toast("Could not undo: " + ex.message);
+    }
+  };
 }
 
 /* ---------------- boot + events ---------------- */

@@ -89,10 +89,12 @@ Two levels, owned by the domain API (`app_users` + `organization_memberships`
 in Postgres — NocoDB has no say):
 
 - **member** — the lead-gen team: work leads, status/owner/notes/favorites,
-  remove/restore, every list view.
+  remove/restore, every list view except Removed. An accidental remove gets a
+  5-second undo toast (bottom right) that restores the exact swept ids.
 - **admin** — the manager: everything above plus 🔎 Find jobs (it spends the
   Apify balance), the import drop zone, user management, the NocoDB admin
-  link, and the **Team activity** tab.
+  link, and the **Team activity** and **Removed** tabs (both under Manage;
+  `/api/leads?removed=true` 403s for members).
 
 Enforcement is server-side (403s in `server/*`); the `.admin-only hidden`
 markup + reveal in `boot()` is presentation. `node server/cli.js user:add`
