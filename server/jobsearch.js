@@ -15,7 +15,7 @@ const { query } = require("./db");
 const { requireAdmin } = require("./auth");
 const activity = require("./activity");
 const counts = require("./counts");
-const { mintCode, isoDate } = require("./dedupe");
+const { mintCode, isoDate, aliases, clean, cleanPlace } = require("./dedupe");
 
 const router = express.Router();
 // path-scoped: routers share "/"
@@ -155,6 +155,126 @@ function itemLocation(it) {
   return { city: loc.city || null, state: loc.admin || loc.admin_area || null };
 }
 
+/* ---------------- employers -> company leads
+   Every scrape also upserts the company behind each posting, so the org lands
+   on the Companies tab — logo included — the moment we see it hiring.
+   Identity keeps the franchise guards: the base is matched on the name+city
+   key (the org's LinkedIn HQ city, never the posting's location), while
+   companies this source created earlier match on the organization name alone —
+   within one job board the org name IS one LinkedIn entity, which keeps
+   repeat scrapes idempotent without risking a cross-source franchise merge. */
+
+const httpUrl = (u) => {
+  const s = String(u || "").trim();
+  return /^https?:\/\//i.test(s) && s.length <= 500 ? s : null;
+};
+
+/* the company's own HQ ("Denver, Colorado") beats the posting's location —
+   a remote job's city says nothing about where the employer is */
+function orgLocation(it) {
+  const hq = clean(it.org_linkedin_headquarters);
+  if (hq && hq.includes(",")) {
+    const [c, s] = hq.split(",").map((x) => x.trim());
+    return { city: cleanPlace(c), state: cleanPlace(s) };
+  }
+  return itemLocation(it);
+}
+
+function orgFacts(it) {
+  const { city, state } = orgLocation(it);
+  return {
+    logo_url: httpUrl(it.organization_logo),
+    website: clean(it.org_linkedin_website),
+    industry: clean(it.org_linkedin_industry),
+    employees: Number.isFinite(+it.org_linkedin_headcount)
+      ? Math.round(+it.org_linkedin_headcount) : null,
+    city, state,
+  };
+}
+
+async function resolveCompanies(items, stamp) {
+  const orgs = new Map();                 // lower(name) -> { name, it }
+  for (const it of items) {
+    const name = clean(it.organization);
+    if (!name) continue;
+    const k = name.toLowerCase();
+    // several postings per org: keep the one that actually carries the logo
+    if (!orgs.has(k) || (!orgs.get(k).it.organization_logo && it.organization_logo))
+      orgs.set(k, { name, it });
+  }
+  const out = { ids: new Map(), inserted: 0, updated: 0 };
+  if (!orgs.size) return out;
+
+  /* two indexed reads sized to the scrape, never a scan of the base */
+  const byName = new Map();
+  for (const r of (await query(
+    `SELECT id, lower(name) AS k, logo_url, website, industry, employees,
+            city, state
+     FROM leads WHERE kind = 'company' AND source = 'Job board'
+       AND lower(name) = ANY($1)`, [[...orgs.keys()]])).rows)
+    if (!byName.has(r.k)) byName.set(r.k, r);
+
+  const wantKeys = [];
+  for (const o of orgs.values()) {
+    const { city } = orgLocation(o.it);
+    if (!city) continue;
+    for (const a of aliases(o.name).set)
+      wantKeys.push(`${a}|${city.toLowerCase()}`);
+  }
+  const byKey = new Map();
+  if (wantKeys.length)
+    for (const r of (await query(
+      `SELECT k.key_value, l.id, l.logo_url, l.website, l.industry,
+              l.employees, l.city, l.state
+       FROM lead_keys k JOIN leads l ON l.id = k.lead_id
+       WHERE k.kind = 'company' AND k.key_type = 'namecity'
+         AND k.key_value = ANY($1)`, [wantKeys])).rows)
+      if (!byKey.has(r.key_value)) byKey.set(r.key_value, r);
+
+  for (const [k, o] of orgs) {
+    const facts = orgFacts(o.it);
+    let hit = null;
+    if (facts.city)
+      for (const a of aliases(o.name).set) {
+        hit = byKey.get(`${a}|${facts.city.toLowerCase()}`);
+        if (hit) break;
+      }
+    if (!hit) hit = byName.get(k);
+    if (hit) {
+      out.ids.set(k, hit.id);
+      // enrich blanks only — a scrape never overwrites curated data
+      const sets = [], params = [];
+      for (const [f, v] of Object.entries(facts))
+        if (v != null && hit[f] == null) sets.push(`${f} = $${params.push(v)}`);
+      if (sets.length) {
+        sets.push("updated_at = now()");
+        await query(`UPDATE leads SET ${sets.join(", ")}
+                     WHERE id = $${params.push(hit.id)}`, params);
+        out.updated++;
+      }
+      continue;
+    }
+    const row = (await query(
+      `INSERT INTO leads (lead_code, kind, name, company, website, industry,
+         employees, city, state, logo_url, source, source_file, date_added)
+       VALUES ($1, 'company', $2, $2, $3, $4, $5, $6, $7, $8,
+               'Job board', 'LinkedIn search', $9)
+       RETURNING id`,
+      [mintCode(), o.name, facts.website, facts.industry, facts.employees,
+       facts.city, facts.state, facts.logo_url, stamp])).rows[0];
+    out.ids.set(k, row.id);
+    out.inserted++;
+    // claim the name+city keys so the next import meets this company
+    if (facts.city)
+      for (const a of aliases(o.name).set)
+        await query(
+          `INSERT INTO lead_keys (kind, key_type, key_value, lead_id)
+           VALUES ('company', 'namecity', $1, $2) ON CONFLICT DO NOTHING`,
+          [`${a}|${facts.city.toLowerCase()}`, row.id]);
+  }
+  return out;
+}
+
 async function lastRunCost() {
   const r = await apify(`/acts/${ACTOR}/runs/last`);
   const d = r?.data || {};
@@ -182,9 +302,14 @@ router.post("/api/job-search", express.json({ limit: "64kb" }), async (req, res,
       { method: "POST", body: JSON.stringify(input) });
     const found = Array.isArray(items) ? items : [];
 
+    const stamp = new Date().toISOString().slice(0, 10);
+
+    /* employers first — even a duplicate posting can bring a logo or an org
+       we have never stored, so this runs over everything the search found */
+    const companies = await resolveCompanies(found, stamp);
+
     /* the actor's ats_duplicate flag marks overlap with the vendor's OTHER
        dataset, not duplication inside these results — don't drop on it */
-    const stamp = new Date().toISOString().slice(0, 10);
     let duplicates = 0, inserted = 0;
     const seenUrls = new Set(), seenTitleOrgs = new Set();
     for (const it of found) {
@@ -198,17 +323,20 @@ router.post("/api/job-search", express.json({ limit: "64kb" }), async (req, res,
       }
       if (u) seenUrls.add(u);
       if (k) seenTitleOrgs.add(k);
+      const org = clean(it.organization);
       await query(
         `INSERT INTO leads (lead_code, kind, name, company, contact, contact_title,
-           industry, employees, city, state, job_url, source, source_file, date_added)
+           industry, employees, city, state, job_url, source, source_file, date_added,
+           company_lead_id)
          VALUES ($1, 'job', $2, $3, $4, $5, $6, $7, $8, $9, $10,
-                 'Job board', 'LinkedIn search', $11)`,
-        [mintCode(), it.title || "Job posting", it.organization || null,
+                 'Job board', 'LinkedIn search', $11, $12)`,
+        [mintCode(), it.title || "Job posting", org,
          it.recruiter_name || null, it.recruiter_title || null,
          it.org_linkedin_industry || null,
          Number.isFinite(+it.org_linkedin_headcount) ? Math.round(+it.org_linkedin_headcount) : null,
          city, state, it.url || null,
-         isoDate(it.date_posted) || stamp]);
+         isoDate(it.date_posted) || stamp,
+         org ? companies.ids.get(org.toLowerCase()) ?? null : null]);
       inserted++;
     }
     counts.invalidate();
@@ -225,11 +353,14 @@ router.post("/api/job-search", express.json({ limit: "64kb" }), async (req, res,
     } catch (e) { console.warn("could not compute run cost:", e.message); }
 
     activity.log({ actor: req.user.email, user_id: req.user.id, action: "jobsearch",
-      meta: { found: found.length, inserted, duplicates, costUsd: cost?.usd ?? null } });
+      meta: { found: found.length, inserted, duplicates,
+        companies: companies.inserted, costUsd: cost?.usd ?? null } });
 
     res.json({
       input: { limit: input.limit, timeRange: input.timeRange },
-      found: found.length, inserted, duplicates, cost,
+      found: found.length, inserted, duplicates,
+      companies: { inserted: companies.inserted, updated: companies.updated },
+      cost,
     });
   } catch (e) { next(e); }
 });
@@ -260,4 +391,4 @@ router.get("/api/apify-usage", async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-module.exports = { router };
+module.exports = { router, resolveCompanies };   // resolveCompanies: for tests
