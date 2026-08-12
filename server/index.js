@@ -50,6 +50,12 @@ app.use(require("./users").router);
 app.use(require("./jobsearch").router);
 app.use(require("./imports").router);
 
+/* the trash bin, plus its 30-day sweep — mounted after leads so the leads
+   router's requireUser has already run for /api/leads/:id paths */
+const trash = require("./trash");
+app.use(trash.router);
+trash.startSweeper();
+
 const activity = require("./activity");
 app.get("/api/activity", auth.requireAdmin, async (req, res, next) => {
   try { res.json(await activity.summary(req.query.days, req.query.full === "1")); }

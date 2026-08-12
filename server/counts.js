@@ -31,7 +31,8 @@ router.get("/api/counts", requireUser, async (req, res, next) => {
         count(*) FILTER (WHERE date_added >= current_date - 13
                          AND date_added < current_date - 6
                          AND NOT removed)::int                         AS prev_week
-      FROM leads`)).rows[0];
+      FROM leads
+      WHERE deleted_at IS NULL`)).rows[0];   // the trash bin counts as gone
     cached = { ...r, total: r.companies + r.people + r.jobs, at: new Date().toISOString() };
     cachedAt = Date.now();
     res.json(cached);

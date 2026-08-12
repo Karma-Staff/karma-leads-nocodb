@@ -186,7 +186,8 @@ const titleOrgKey = (title, org, city) =>
 async function existingJobKeys() {
   const urls = new Set(), titleOrgs = new Set();
   const rows = (await query(
-    "SELECT job_url, name, company, city FROM leads WHERE kind = 'job'")).rows;
+    `SELECT job_url, name, company, city FROM leads
+     WHERE kind = 'job' AND deleted_at IS NULL`)).rows;
   for (const r of rows) {
     const u = urlKey(r.job_url);
     if (u) urls.add(u);
@@ -312,7 +313,7 @@ async function resolveCompanies(items, stamp) {
     `SELECT id, lower(name) AS k, logo_url, website, industry, employees,
             city, state
      FROM leads WHERE kind = 'company' AND source = 'Job board'
-       AND lower(name) = ANY($1)`, [[...orgs.keys()]])).rows)
+       AND deleted_at IS NULL AND lower(name) = ANY($1)`, [[...orgs.keys()]])).rows)
     if (!byName.has(r.k)) byName.set(r.k, r);
 
   const wantKeys = [];
@@ -329,7 +330,7 @@ async function resolveCompanies(items, stamp) {
               l.employees, l.city, l.state
        FROM lead_keys k JOIN leads l ON l.id = k.lead_id
        WHERE k.kind = 'company' AND k.key_type = 'namecity'
-         AND k.key_value = ANY($1)`, [wantKeys])).rows)
+         AND l.deleted_at IS NULL AND k.key_value = ANY($1)`, [wantKeys])).rows)
       if (!byKey.has(r.key_value)) byKey.set(r.key_value, r);
 
   for (const [k, o] of orgs) {

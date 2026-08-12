@@ -22,7 +22,7 @@ router.get("/api/recents", async (req, res, next) => {
     const rows = (await query(
       `SELECT l.*, r.touched_at, r.kind AS touch_kind
        FROM recents r JOIN leads l ON l.id = r.lead_id
-       WHERE r.user_id = $1 AND NOT l.removed
+       WHERE r.user_id = $1 AND NOT l.removed AND l.deleted_at IS NULL
        ORDER BY r.touched_at DESC LIMIT ${MAX}`, [req.user.id])).rows;
     res.json({ list: rows, max: MAX });
   } catch (e) { next(e); }
@@ -34,7 +34,8 @@ router.post("/api/recents", express.json({ limit: "4kb" }), async (req, res, nex
     if (!Number.isInteger(leadId) || leadId <= 0)
       return res.status(400).json({ error: "bad lead id" });
     const lead = (await query(
-      "SELECT id, lead_code, name FROM leads WHERE id = $1", [leadId])).rows[0];
+      `SELECT id, lead_code, name FROM leads
+       WHERE id = $1 AND deleted_at IS NULL`, [leadId])).rows[0];
     if (!lead) return res.status(404).json({ error: "no such lead" });
     await query(
       `INSERT INTO recents (user_id, lead_id, kind) VALUES ($1, $2, 'open')

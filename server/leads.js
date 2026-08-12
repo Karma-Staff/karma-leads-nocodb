@@ -61,8 +61,10 @@ function buildFilters(p) {
     where.push(sql.replace(/\?/g, () => `$${params.push(vals.shift())}`));
   };
   if (["company", "person", "job"].includes(p.kind)) add("kind = ?", p.kind);
-  // removed=true is the Removed tab; everything else excludes banned leads
+  // removed=true is the DNC tab; everything else excludes banned leads
   add(p.removed === "true" ? "removed" : "NOT removed");
+  // a deleted lead is in the admin's trash bin: no tab, DNC included, shows it
+  add("deleted_at IS NULL");
   if (p.favorite === "true") add("favorite");
   if (STATUSES.includes(p.status)) add("status = ?", p.status);
   if (p.owner) add("owner = ?", p.owner);
@@ -139,40 +141,45 @@ router.get("/api/leads/:key", async (req, res, next) => {
     if (coId) {
       if (row.kind !== "company")
         related.company = (await query(
-          "SELECT id, lead_code, name, city, state, logo_url FROM leads WHERE id = $1",
-          [coId])).rows[0] || null;
+          `SELECT id, lead_code, name, city, state, logo_url FROM leads
+           WHERE id = $1 AND deleted_at IS NULL`, [coId])).rows[0] || null;
       related.people = (await query(
         `SELECT id, lead_code, name, title, email, phone FROM leads
          WHERE kind = 'person' AND company_lead_id = $1 AND NOT removed
-           AND id <> $2 ORDER BY id LIMIT 6`, [coId, row.id])).rows;
+           AND deleted_at IS NULL AND id <> $2 ORDER BY id LIMIT 6`,
+        [coId, row.id])).rows;
       related.jobs = (await query(
         `SELECT id, lead_code, name, city, state, job_url FROM leads
          WHERE kind = 'job' AND company_lead_id = $1 AND NOT removed
-           AND id <> $2 ORDER BY date_added DESC NULLS LAST LIMIT 4`,
-        [coId, row.id])).rows;
+           AND deleted_at IS NULL AND id <> $2
+         ORDER BY date_added DESC NULLS LAST LIMIT 4`, [coId, row.id])).rows;
     }
     if (row.kind === "company" && row.category && row.state) {
       const seg = (await query(
         `SELECT count(*)::int n FROM leads
-         WHERE kind = 'company' AND NOT removed AND category = $1
-           AND state = $2 AND id <> $3`, [row.category, row.state, row.id])).rows[0];
+         WHERE kind = 'company' AND NOT removed AND deleted_at IS NULL
+           AND category = $1 AND state = $2 AND id <> $3`,
+        [row.category, row.state, row.id])).rows[0];
       related.similar = { category: row.category, state: row.state, count: seg.n };
     }
     res.json({ ...row, related });
   } catch (e) { next(e); }
 });
 
+/* a lead in the trash bin is not findable — a stale link 404s rather than
+   opening a record the app is meant to have stopped showing */
 async function findLead(key) {
   if (/^\d+$/.test(key))
-    return (await query("SELECT * FROM leads WHERE id = $1", [+key])).rows[0];
+    return (await query(
+      "SELECT * FROM leads WHERE id = $1 AND deleted_at IS NULL", [+key])).rows[0];
   const code = String(key).toUpperCase();
   const direct = (await query(
-    "SELECT * FROM leads WHERE lead_code = $1", [code])).rows[0];
+    "SELECT * FROM leads WHERE lead_code = $1 AND deleted_at IS NULL", [code])).rows[0];
   if (direct) return direct;
   // a tombstoned code from an old bookmark still resolves
   return (await query(
     `SELECT l.* FROM lead_code_aliases a JOIN leads l ON l.id = a.lead_id
-     WHERE a.code = $1`, [code])).rows[0];
+     WHERE a.code = $1 AND l.deleted_at IS NULL`, [code])).rows[0];
 }
 
 const touchRecent = (client, userId, leadId, kind) => client.query(
@@ -189,7 +196,8 @@ router.patch("/api/leads/:id", express.json({ limit: "8kb" }), async (req, res, 
       return res.status(400).json({ error: "unknown status" });
     const row = await tx(async (client) => {
       const cur = (await client.query(
-        "SELECT * FROM leads WHERE id = $1 FOR UPDATE", [id])).rows[0];
+        `SELECT * FROM leads WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`,
+        [id])).rows[0];
       if (!cur) return null;
       const sets = [], params = [];
       const logs = [];
@@ -227,12 +235,14 @@ router.patch("/api/leads/:id", express.json({ limit: "8kb" }), async (req, res, 
 router.get("/api/leads/:id/remove-preview", async (req, res, next) => {
   try {
     const row = (await query(
-      "SELECT phone_key FROM leads WHERE id = $1", [+req.params.id])).rows[0];
+      `SELECT phone_key FROM leads WHERE id = $1 AND deleted_at IS NULL`,
+      [+req.params.id])).rows[0];
     if (!row) return res.status(404).json({ error: "no such lead" });
     if (!row.phone_key) return res.json({ affected: 1 });
     const n = (await query(
       `SELECT count(*)::int n FROM leads
-       WHERE phone_key = $1 AND NOT removed`, [row.phone_key])).rows[0].n;
+       WHERE phone_key = $1 AND NOT removed AND deleted_at IS NULL`,
+      [row.phone_key])).rows[0].n;
     res.json({ affected: Math.max(n, 1) });
   } catch (e) { next(e); }
 });
@@ -244,7 +254,8 @@ router.post("/api/leads/:id/remove", express.json({ limit: "8kb" }), async (req,
     const reason = String(req.body?.reason || "").slice(0, 300);
     const out = await tx(async (client) => {
       const cur = (await client.query(
-        "SELECT * FROM leads WHERE id = $1 FOR UPDATE", [id])).rows[0];
+        `SELECT * FROM leads WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`,
+        [id])).rows[0];
       if (!cur) return null;
       let ids = [];
       if (cur.phone_key) {
@@ -254,7 +265,8 @@ router.post("/api/leads/:id/remove", express.json({ limit: "8kb" }), async (req,
           [cur.phone, cur.phone_key, cur.company || cur.name, reason, req.user.email]);
         ids = (await client.query(
           `UPDATE leads SET removed = true, updated_at = now()
-           WHERE phone_key = $1 AND NOT removed RETURNING id`,
+           WHERE phone_key = $1 AND NOT removed AND deleted_at IS NULL
+           RETURNING id`,
           [cur.phone_key])).rows.map((r) => r.id);
       }
       if (!ids.length) {
@@ -285,11 +297,12 @@ router.post("/api/leads/:id/restore", express.json({ limit: "8kb" }), async (req
     const ids = [...new Set([id, ...extra])];
     const out = await tx(async (client) => {
       const cur = (await client.query(
-        "SELECT * FROM leads WHERE id = $1 FOR UPDATE", [id])).rows[0];
+        `SELECT * FROM leads WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`,
+        [id])).rows[0];
       if (!cur) return null;
       const affected = (await client.query(
         `UPDATE leads SET removed = false, updated_at = now()
-         WHERE id = ANY($1)`, [ids])).rowCount;
+         WHERE id = ANY($1) AND deleted_at IS NULL`, [ids])).rowCount;
       if (cur.phone_key)
         await client.query("DELETE FROM blocklist WHERE phone_key = $1",
           [cur.phone_key]);

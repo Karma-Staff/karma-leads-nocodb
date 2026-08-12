@@ -22,7 +22,7 @@ const PAGE_SIZES = [25, 50, 100, 200];
 
 /* Every tab is the same /api/leads query with different parameters — the old
    three-tables-merged-in-the-browser union (and its 1,000-row correctness cap)
-   is gone; Favorites and Removed are just filters now. */
+   is gone; Favorites and DNC are just filters now. */
 const TABS = {
   companies: { title: "Companies", kind: "company", pv: "Company", dateField: "Date Added" },
   people:    { title: "People",    kind: "person",  pv: "Name",    dateField: "Date Added" },
@@ -32,7 +32,7 @@ const TABS = {
   recent:    { title: "Recent activity", activity: true },
   favorites: { title: "Favorites", favorite: true },
   // admin-only under Manage: members remove with a 5s undo instead of a tab
-  removed:   { title: "Removed",   removedTab: true, admin: true },
+  removed:   { title: "DNC — do not call", removedTab: true, admin: true },
   // admin-only, and not a list of leads at all: the team's action log
   stats:     { title: "Team activity", stats: true, admin: true },
   // not in the sidebar: entered by clicking a segment tag in the reading pane
@@ -322,7 +322,7 @@ function matchesFilters(r) {
 
 /* ---------------- list ----------------
    One endpoint serves every tab: /api/leads with different parameters. The
-   sidebar tabs are kind filters, Favorites/Removed are boolean filters (no
+   sidebar tabs are kind filters, Favorites/DNC are boolean filters (no
    more browser-side union or its 1,000-row cap), and a segment is just
    category + state. Paging is keyset: cursors[n] reaches page n+1, so page
    400 costs what page 1 costs and rows can't shift underneath the pager. */
@@ -696,9 +696,6 @@ function renderDetail(r) {
         <button class="fav-btn" id="d-fav" title="Favorite">
           <span class="fav-star${r.Favorite ? " on" : ""}" style="font-size:20px">★</span>
         </button>
-        <button class="fav-btn remove-btn" id="d-remove"
-                title="${r.Removed ? "Restore this lead" : "Remove — bans the phone number from calling"}">${
-                  r.Removed ? "↩ Restore" : "🚫 Remove"}</button>
       </div>
     </div>
 
@@ -733,6 +730,17 @@ function renderDetail(r) {
       </div>
     </div>
 
+    <!-- the two destructive actions live below the notes, out of reach of the
+         header: DNC bans the phone number and keeps the lead; delete (admins
+         only) takes it out of the app into the trash bin. -->
+    <div class="detail-danger">
+      <button class="remove-btn" id="d-remove"
+              title="${r.Removed ? "Restore this lead and un-ban its number" : "DNC — bans the phone number from calling"}">${
+                r.Removed ? "↩ Restore" : "🚫 DNC"}</button>
+      ${S.me?.role === "admin" ? `<button class="delete-btn" id="d-delete"
+              title="Delete — moves this lead to the trash bin">🗑 Delete</button>` : ""}
+    </div>
+
     <div class="detail-section" id="related-section"></div>`;
 
   $("d-status").addEventListener("change", async (e) => {
@@ -753,6 +761,7 @@ function renderDetail(r) {
   $("d-fav").addEventListener("click", () => toggleFavorite(r));
   $("d-remove").addEventListener("click", () =>
     r.Removed ? doRestore(r) : openRemoveModal(r));
+  $("d-delete")?.addEventListener("click", () => openDeleteModal(r));
   $("d-owner").addEventListener("change", async (e) => {
     await patchLead(r.Id, { owner: e.target.value || null });
     r.Owner = e.target.value;
@@ -1714,7 +1723,7 @@ async function openRemoveModal(r) {
       const out = await removeLead(r, reason);
       closeModal();
       const msg = `Removed ${out.affected} lead${out.affected === 1 ? "" : "s"}${key ? ` · ${phone} banned` : ""}`;
-      // a member has no Removed tab to dig a slip out of — give them 5s to undo
+      // a member has no DNC tab to dig a slip out of — give them 5s to undo
       if (S.me?.role === "admin") toast(msg);
       else showUndo(msg, r.Id, out.ids);
       S.sel = null;
@@ -1735,6 +1744,166 @@ async function doRestore(r) {
   $("detail").classList.add("hidden");
   $("detail-empty").classList.remove("hidden");
   loadList(); refreshCounts();
+}
+
+/* ---------------- delete / trash bin (admin) ----------------
+   Delete is not the DNC ban. Remove blocklists a phone number and keeps the
+   lead under Manage → DNC; delete takes the lead out of the app and parks it
+   in the bin, where it is destroyed for good after 30 days (or the moment the
+   admin empties it). Deleting a company takes its job postings with it — a
+   posting with no employer is noise — but deleting a job never touches the
+   company the scrape built. The bin lives in the user menu, not the sidebar:
+   it is a recovery hatch, not a view anyone works from. */
+const TRASH_DAYS = 30;
+
+async function openDeleteModal(r) {
+  const name = displayName(r, r._t);
+  let pv = { jobs: 0, purgeAfterDays: TRASH_DAYS };
+  try { pv = await api(`/api/leads/${r.Id}/delete-preview`); }
+  catch { /* best effort — the modal still states the rule */ }
+  const jobs = pv.jobs || 0;
+  $("modal-title").textContent = "Delete lead";
+  $("modal-body").innerHTML = `
+    <p class="modal-note">
+      <b>${esc(name)}</b> goes to the trash bin${jobs
+        ? `, and so do its <b>${jobs} job posting${jobs === 1 ? "" : "s"}</b>`
+        : ""}. It disappears from every list, count and search straight away.
+    </p>
+    <div class="import-report">
+      <div class="ir-row"><span>Recoverable from</span>
+        <strong>Trash — in the user menu</strong></div>
+      <div class="ir-row"><span>Destroyed for good</span>
+        <strong>${pv.purgeAfterDays || TRASH_DAYS} days after deletion</strong></div>
+      <div class="ir-row"><span>Phone number</span>
+        <strong>Not banned — that's 🚫 Remove</strong></div>
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="btn-secondary" id="modal-cancel">Cancel</button>
+      <button type="button" class="btn-danger" id="delete-go">Delete${
+        jobs ? ` ${jobs + 1} leads` : ""}</button>
+    </div>`;
+  $("modal-backdrop").classList.remove("hidden");
+  $("modal-cancel").addEventListener("click", closeModal);
+  $("delete-go").addEventListener("click", async (e) => {
+    const btn = e.target;
+    btn.disabled = true; btn.textContent = "Deleting…";
+    try {
+      const out = await api(`/api/leads/${r.Id}`, { method: "DELETE" });
+      closeModal();
+      toast(`Moved ${out.affected} lead${out.affected === 1 ? "" : "s"} to the trash`);
+      S.sel = null;
+      $("detail").classList.add("hidden");
+      $("detail-empty").classList.remove("hidden");
+      loadList(); refreshCounts();
+    } catch (ex) {
+      btn.disabled = false; btn.textContent = "Delete";
+      toast("Could not delete: " + ex.message);
+    }
+  });
+}
+
+async function openTrashModal() {
+  $("modal-title").textContent = "Trash";
+  document.querySelector(".modal").classList.add("wide");
+  $("modal-body").innerHTML = `
+    <p class="modal-sub">Deleted leads wait here for <b>${TRASH_DAYS} days</b>,
+      then they are destroyed for good — the lead and its notes with it.
+      Restoring puts a lead back exactly where it was.</p>
+    <div id="trash-list" class="trash-list"><div class="modal-sub">Loading…</div></div>
+    <div id="trash-error" class="login-error hidden"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn-danger" id="trash-empty">Empty trash now</button>
+      <button type="button" class="btn-secondary" id="modal-cancel">Close</button>
+    </div>`;
+  $("modal-backdrop").classList.remove("hidden");
+  $("modal-cancel").addEventListener("click", closeModal);
+  // two clicks, not a second modal: the first arms it, the second destroys
+  $("trash-empty").addEventListener("click", async (e) => {
+    const btn = e.target;
+    if (btn.dataset.armed !== "1") {
+      btn.dataset.armed = "1";
+      btn.textContent = "Click again to destroy everything";
+      setTimeout(() => {
+        if (!btn.isConnected || btn.dataset.armed !== "1") return;
+        btn.dataset.armed = "";
+        btn.textContent = "Empty trash now";
+      }, 5000);
+      return;
+    }
+    btn.disabled = true; btn.textContent = "Emptying…";
+    try {
+      const out = await api("/api/trash", { method: "DELETE" });
+      toast(`Destroyed ${out.destroyed} lead${out.destroyed === 1 ? "" : "s"}`);
+      closeModal();
+      refreshCounts();
+    } catch (ex) {
+      btn.disabled = false; btn.dataset.armed = "";
+      btn.textContent = "Empty trash now";
+      trashError(ex.message);
+    }
+  });
+  await renderTrashList();
+}
+
+function trashError(msg) {
+  const err = $("trash-error");
+  if (!err) return;
+  err.textContent = msg;
+  err.classList.remove("hidden");
+}
+
+const KIND_LABEL = { company: "Company", person: "Person", job: "Job" };
+
+async function renderTrashList() {
+  const el = $("trash-list");
+  if (!el) return;
+  let d;
+  try { d = await api("/api/trash"); }
+  catch (ex) { el.innerHTML = ""; trashError(ex.message); return; }
+  const days = d.purgeAfterDays || TRASH_DAYS;
+  const rows = d.list.map((t) => {
+    const left = Math.max(0, Math.ceil(
+      (new Date(t.deleted_at).getTime() + days * 864e5 - Date.now()) / 864e5));
+    const sub = [t.company && t.company !== t.name ? t.company : null,
+      [t.city, t.state].filter(Boolean).join(", ") || null,
+      t.deleted_by ? `deleted by ${t.deleted_by}` : null,
+      relTime(t.deleted_at)].filter(Boolean).join(" · ");
+    return `
+    <div class="trash-row">
+      <span class="trash-kind tk-${t.kind}">${KIND_LABEL[t.kind] || t.kind}</span>
+      <div class="user-id">
+        <div class="user-name">${esc(t.name || "(no name)")}</div>
+        <div class="user-sub">${esc(sub)}</div>
+      </div>
+      <span class="trash-left${left <= 3 ? " soon" : ""}">${left === 0
+        ? "purges today" : `${left}d left`}</span>
+      <button type="button" class="btn-ghost trash-restore" data-id="${t.id}">↩ Restore</button>
+    </div>`;
+  }).join("");
+  el.innerHTML = rows || `<div class="modal-sub">The trash is empty.</div>`;
+  if (d.total > d.shown)
+    el.insertAdjacentHTML("beforeend",
+      `<div class="modal-sub">Showing the newest ${d.shown} of
+        ${d.total.toLocaleString()} deleted leads.</div>`);
+  const btn = $("trash-empty");
+  if (btn) {
+    btn.disabled = !d.total;
+    btn.textContent = d.total
+      ? `Empty trash now (${d.total.toLocaleString()})` : "Trash is empty";
+  }
+  el.querySelectorAll(".trash-restore").forEach((b) =>
+    b.addEventListener("click", async () => {
+      b.disabled = true; b.textContent = "…";
+      try {
+        const out = await api(`/api/trash/${b.dataset.id}/restore`, { method: "POST" });
+        toast(`Restored ${out.affected} lead${out.affected === 1 ? "" : "s"}`);
+        await renderTrashList();
+        loadList(); refreshCounts();
+      } catch (ex) {
+        b.disabled = false; b.textContent = "↩ Restore";
+        trashError(ex.message);
+      }
+    }));
 }
 
 /* ---------------- Team activity (admin) ----------------
@@ -1826,6 +1995,12 @@ function feedLine(f) {
       (m.affected > 1 ? ` <span class="feed-what">and ${m.affected - 1} more sharing its number</span>` : "") +
       (f.to_value ? ` <span class="feed-what">(${esc(f.to_value)})</span>` : "");
     case "restore": return `restored ${name}`;
+    case "delete": return `deleted ${name} to the trash` +
+      (m.jobs > 0 ? ` <span class="feed-what">with ${m.jobs} job posting${m.jobs === 1 ? "" : "s"}</span>` : "");
+    case "undelete": return `restored ${name} from the trash` +
+      (m.affected > 1 ? ` <span class="feed-what">with ${m.affected - 1} more</span>` : "");
+    case "purge": return `emptied the trash <span class="feed-what">(${
+      m.count ?? "?"} lead${m.count === 1 ? "" : "s"} destroyed)</span>`;
     case "import": return `imported <b>${esc(f.to_value || "a file")}</b>` +
       (m.inserted ? ` <span class="feed-what">(${JSON.stringify(m.inserted).replace(/[{}"]/g, "")})</span>` : "");
     case "jobsearch": return `ran a${m.scraper === "indeed" ? "n Indeed" : " LinkedIn"} job search <span class="feed-what">(${m.found ?? "?"} found, ${m.inserted ?? "?"} new${
@@ -1882,7 +2057,7 @@ function toast(msg) {
 
 /* Undo toast (bottom right, 5 seconds): restores exactly the id set the
    remove swept — ban lifted too. The window is deliberately short; after it
-   closes the lead is the manager's to restore from the Removed tab. */
+   closes the lead is the manager's to restore from the DNC tab. */
 let undoTimer;
 function showUndo(msg, anchorId, ids) {
   const el = $("undo-toast");
@@ -2054,6 +2229,10 @@ function wire() {
   on("manage-users-btn", "click", () => {
     $("user-dropdown").classList.add("hidden");
     openUsersModal();
+  });
+  on("trash-btn", "click", () => {
+    $("user-dropdown").classList.add("hidden");
+    openTrashModal();
   });
   on("clear-recents", "click", async () => {
     // only forgets the trail — the leads themselves are untouched

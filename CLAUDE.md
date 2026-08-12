@@ -89,12 +89,13 @@ Two levels, owned by the domain API (`app_users` + `organization_memberships`
 in Postgres — NocoDB has no say):
 
 - **member** — the lead-gen team: work leads, status/owner/notes/favorites,
-  remove/restore, every list view except Removed. An accidental remove gets a
+  remove/restore, every list view except DNC. An accidental remove gets a
   5-second undo toast (bottom right) that restores the exact swept ids.
 - **admin** — the manager: everything above plus 🔎 Find jobs (it spends the
   Apify balance), the import drop zone, user management, the NocoDB admin
-  link, and the **Team activity** and **Removed** tabs (both under Manage;
-  `/api/leads?removed=true` 403s for members).
+  link, **deleting leads** (the trash bin, below), and the **Team activity**
+  and **DNC** tabs (both under Manage; `/api/leads?removed=true` 403s for
+  members).
 
 Enforcement is server-side (403s in `server/*`); the `.admin-only hidden`
 markup + reveal in `boot()` is presentation. `node server/cli.js user:add`
@@ -106,6 +107,32 @@ cannot demote or disable themselves.
 `autoInvite()` in `auth.js`. Other domains still bounce with "not invited",
 and a **disabled** account is never resurrected by signing in again. Admin is
 always a manual promotion (Users tab or the CLI).
+
+## Delete and the trash bin (admin)
+
+`server/trash.js` owns the only path that destroys lead data. `leads.deleted_at`
+(+ `deleted_by`, migration `003_trash.sql`) is the bin: a deleted lead vanishes
+from every list, count, dedupe lookup, related-rows panel and `findLead()`, but
+the row survives for **30 days**, then `purge()` hard-deletes it — swept once at
+boot and once a day (`startSweeper()`), or immediately via `DELETE /api/trash`
+(the Trash item in the user menu → *Empty trash now*, two clicks).
+
+- **The cascade is asymmetric on purpose**: deleting a **company** also bins its
+  job postings; deleting a **job** never touches the company the scrape built.
+- **`now()` is transaction-stable, so a company and the jobs it swept share one
+  `deleted_at`** — that shared timestamp is the batch id `POST
+  /api/trash/:id/restore` matches on, so a restore puts back exactly that sweep
+  and not jobs binned separately.
+- Hard delete nulls `company_lead_id` on survivors first: that FK has no
+  `ON DELETE` clause and would otherwise refuse the delete. Everything else
+  (`lead_keys`, `lead_code_aliases`, `lead_comments`, `recents`) cascades;
+  `activity_log` has no FK and outlives its leads.
+- Every read path filters `deleted_at IS NULL` — `leads.js`, `counts.js`,
+  `recents.js`, the `imports.js` dedupe probes, `jobsearch.js`'s known-jobs and
+  company-match queries, and the `segments` view. **Add the filter to any new
+  query over `leads`**, or binned leads reappear as phantom duplicates.
+  Exception: `imports.js`'s lead_code path still updates a binned lead — code is
+  identity, and inserting a second row would collide on the UNIQUE `lead_code`.
 
 ## The activity log (Team activity tab)
 
@@ -227,7 +254,7 @@ Same ~1,900-line vanilla SPA, new data layer. State in one `S` object.
   the render layer still reads the NocoDB-era title-case keys. New fields go
   through there.
 - **Every tab is one `/api/leads` query.** Union tabs and their 1,000-row
-  correctness cap are gone; Favorites/Removed are filters; a segment is
+  correctness cap are gone; Favorites/DNC are filters; a segment is
   `category`+`state` (the Segments table is now a SQL view for the admin grid).
 - **Paging is keyset** (`S.cursors`), not offset: any earlier page and exactly
   one page forward are reachable; the "last page" button is disabled by design.
@@ -253,8 +280,11 @@ Same ~1,900-line vanilla SPA, new data layer. State in one `S` object.
   poured its metadata schema into the app database
   (`scripts/cleanup-nocodb-pollution.sql` was the mop). The server is gone;
   the habit stays: nothing that names a database goes in `.env`.
-- **Removal is a phone ban.** `POST /api/leads/:id/remove` blocklists the
-  number and sweeps every lead sharing it, in one transaction.
+- **Removal is a phone ban, deletion is the trash.** `POST
+  /api/leads/:id/remove` blocklists the number and sweeps every lead sharing
+  it, in one transaction; the rows stay, under Manage → **DNC**. `DELETE
+  /api/leads/:id` is the admin's, and takes the lead out of the app entirely
+  (see below). Don't conflate them.
 - **`karma_api` is the only DDL role, and only via `migrations/`.** The
   NocoDB container's `nocodb_admin` role has row access only — an admin-grid
   user can edit data, never the schema (verified: `CREATE TABLE` is denied).
