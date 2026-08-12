@@ -142,6 +142,17 @@ function relTime(d) {
   if (s < 86400 * 30) return `${Math.floor(s / 86400)}d ago`;
   return new Date(d).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
+/* absolute date for the detail grid — "Aug 12, 2026", never a raw ISO string.
+   A leading YYYY-MM-DD is taken as a plain local date so it doesn't shift a
+   day in negative-UTC timezones. */
+function fmtDate(d) {
+  if (!d) return "";
+  const m = String(d).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  const t = m ? new Date(+m[1], +m[2] - 1, +m[3]) : new Date(d);
+  return Number.isNaN(t.getTime())
+    ? String(d)
+    : t.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
 function displayName(row, tkey) {
   return row[TABS[tkey].pv] || row.Company || "(no name)";
 }
@@ -547,6 +558,8 @@ function renderList() {
     // jobs carry the company in the subtitle instead, so the title stays readable
     const co = r._t === "people" && r.Company && r.Company !== name
       ? ` <span class="co">· ${esc(r.Company)}</span>` : "";
+    // the full name, for the tooltip on rows the ellipsis truncates
+    const full = co ? `${name} · ${r.Company}` : name;
     // the activity trail's touched-at and a job's posting date are real
     // information; an import date is one bulk-load day — show reach instead
     const date = r._touchedAt || (r._t === "jobs" ? r[TABS[r._t].dateField] : "");
@@ -556,7 +569,7 @@ function renderList() {
     <div class="lead-row${sel}" data-i="${i}">
       ${avatarHtml(name, r.Logo)}
       <div class="lead-row-main">
-        <div class="lead-name"><span class="status-dot ${statusDotCls(r.Status)}" title="${esc(r.Status || "New")}"></span>${esc(name)}${co}</div>
+        <div class="lead-name" title="${esc(full)}"><span class="status-dot ${statusDotCls(r.Status)}" title="${esc(r.Status || "New")}"></span>${esc(name)}${co}</div>
         ${rowSubtitle(r) ? `<div class="lead-sub">${esc(rowSubtitle(r))}</div>` : ""}
         ${factsHtml(r)}
         <div class="lead-meta">${sourceChip(r.Source || (r._t === "jobs" ? "Job board" : ""))}${statusChip(r.Status)}</div>
@@ -669,17 +682,23 @@ function renderDetail(r) {
     <div class="detail-top">
       ${avatarHtml(name, r.Logo, "avatar", "width:44px;height:44px;font-size:16px;")}
       <div class="detail-headings">
-        <div class="detail-name">${esc(name)}</div>
+        <div class="detail-name" title="${esc(name)}">${esc(name)}</div>
         <div class="detail-co">${esc(sub)}</div>
-        <div class="lead-meta" style="margin-top:8px">${sourceChip(r.Source || (tkey === "jobs" ? "Job board" : ""))}</div>
+        <!-- the status select lives under the title, not beside it — inline it
+             steals half the header width and wraps long company names. Own
+             class: the density modes hide .lead-meta everywhere -->
+        <div class="detail-meta">
+          <select class="status-select" id="d-status">${opts}</select>
+          ${sourceChip(r.Source || (tkey === "jobs" ? "Job board" : ""))}
+        </div>
       </div>
       <div class="detail-actions">
-        <select class="status-select" id="d-status">${opts}</select>
         <button class="fav-btn" id="d-fav" title="Favorite">
           <span class="fav-star${r.Favorite ? " on" : ""}" style="font-size:20px">★</span>
         </button>
-        <button class="fav-btn" id="d-remove"
-                title="${r.Removed ? "Restore this lead" : "Remove — banned from calling"}">${r.Removed ? "↩" : "🚫"}</button>
+        <button class="fav-btn remove-btn" id="d-remove"
+                title="${r.Removed ? "Restore this lead" : "Remove — bans the phone number from calling"}">${
+                  r.Removed ? "↩ Restore" : "🚫 Remove"}</button>
       </div>
     </div>
 
@@ -701,7 +720,7 @@ function renderDetail(r) {
       ${tkey === "jobs" ? dgItem("Contact title", esc(r["Contact Title"])) : ""}
       <div class="dg-item"><div class="dg-label">Owner</div>
         <div class="dg-value"><input id="d-owner" value="${esc(r.Owner || "")}" placeholder="unassigned"></div></div>
-      ${dgItem("Added", esc(r[dateField] || ""))}
+      ${dgItem("Added", esc(fmtDate(r[dateField])))}
       ${dgItem("Source file", esc(r["Source File"]))}
     </div>
 
@@ -826,7 +845,7 @@ function relatedRow(name, sub, onclickIdx, avatar = true, logo = null) {
   <div class="related-row${avatar || logo ? "" : " no-avatar"}" data-rel="${onclickIdx}">
     ${avatar || logo ? avatarHtml(name, logo, "avatar avatar-sm") : ""}
     <div class="related-main">
-      <div class="related-name">${esc(name)}</div>
+      <div class="related-name" title="${esc(name)}">${esc(name)}</div>
       ${sub ? `<div class="related-sub">${esc(sub)}</div>` : ""}
     </div>
   </div>`;
