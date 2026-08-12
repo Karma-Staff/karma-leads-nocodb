@@ -52,7 +52,7 @@ function fromApi(r) {
     "Job Title": r.kind === "job" ? r.name : null,
     Title: r.title, Contact: r.contact, "Contact Title": r.contact_title,
     Email: r.email, Phone: r.phone, "Phone Key": r.phone_key,
-    Website: r.website, "Job URL": r.job_url,
+    Website: r.website, "Job URL": r.job_url, Logo: r.logo_url,
     Category: r.category, Industry: r.industry,
     Employees: r.employees, Revenue: r.revenue, Certs: r.certs,
     City: r.city, State: r.state,
@@ -527,6 +527,13 @@ function factsHtml(r) {
   return out.length ? `<div class="lead-facts">${out.join("")}</div>` : "";
 }
 
+/* the initials circle, overlaid by the real logo when the scrape brought one —
+   a stale or blocked logo URL just falls back to the initials */
+function avatarHtml(name, logo, cls = "avatar", style = "") {
+  return `<span class="${cls}" style="${style}background:${avColor(name)}">${esc(initials(name))}${
+    logo ? `<img class="avatar-img" src="${esc(logo)}" alt="" loading="lazy" onerror="this.remove()">` : ""}</span>`;
+}
+
 function renderList() {
   const el = $("lead-list");
   el.innerHTML = S.list.map((r, i) => {
@@ -540,7 +547,7 @@ function renderList() {
     const sel = S.sel && S.sel.row.Id === r.Id && S.sel.tkey === r._t ? " selected" : "";
     return `
     <div class="lead-row${sel}" data-i="${i}">
-      <span class="avatar" style="background:${avColor(name)}">${esc(initials(name))}</span>
+      ${avatarHtml(name, r.Logo)}
       <div class="lead-row-main">
         <div class="lead-name"><span class="status-dot ${statusDotCls(r.Status)}" title="${esc(r.Status || "New")}"></span>${esc(name)}${co}</div>
         ${rowSubtitle(r) ? `<div class="lead-sub">${esc(rowSubtitle(r))}</div>` : ""}
@@ -653,7 +660,7 @@ function renderDetail(r) {
 
   $("detail").innerHTML = `
     <div class="detail-top">
-      <span class="avatar" style="width:44px;height:44px;font-size:16px;background:${avColor(name)}">${esc(initials(name))}</span>
+      ${avatarHtml(name, r.Logo, "avatar", "width:44px;height:44px;font-size:16px;")}
       <div class="detail-headings">
         <div class="detail-name">${esc(name)}</div>
         <div class="detail-co">${esc(sub)}</div>
@@ -804,14 +811,13 @@ async function patchLead(id, fields) {
 
 /* ---------------- related ----------------
    People get an initials avatar — that reads as a person. Companies and job
-   postings don't: an initials circle beside a company name looks like a logo
-   we don't have, so those rows are plain text. */
-function relatedRow(name, sub, onclickIdx, avatar = true) {
+   postings only get one when a scrape brought the real logo: an initials
+   circle beside a company name looks like a logo we don't have, so logo-less
+   rows stay plain text. */
+function relatedRow(name, sub, onclickIdx, avatar = true, logo = null) {
   return `
-  <div class="related-row${avatar ? "" : " no-avatar"}" data-rel="${onclickIdx}">
-    ${avatar
-      ? `<span class="avatar avatar-sm" style="background:${avColor(name)}">${esc(initials(name))}</span>`
-      : ""}
+  <div class="related-row${avatar || logo ? "" : " no-avatar"}" data-rel="${onclickIdx}">
+    ${avatar || logo ? avatarHtml(name, logo, "avatar avatar-sm") : ""}
     <div class="related-main">
       <div class="related-name">${esc(name)}</div>
       ${sub ? `<div class="related-sub">${esc(sub)}</div>` : ""}
@@ -862,7 +868,8 @@ async function renderRelated(r) {
             <span class="seg-count">${count.toLocaleString()}</span></h4>`;
           for (const c of others) {
             html += relatedRow(c.name || "?",
-              locationLabel({ City: c.city, State: c.state }), actions.length, false);
+              locationLabel({ City: c.city, State: c.state }), actions.length,
+              false, c.logo_url);
             actions.push(() => select({ Id: c.id, _t: "companies" }));
           }
           html += `<button class="seg-all" data-seg-cat="${esc(category)}"
@@ -874,7 +881,7 @@ async function renderRelated(r) {
       if (rel.company) {
         html += `<h4>Company</h4>`;
         html += relatedRow(rel.company.name || "?", "View company record →",
-          actions.length, false);
+          actions.length, false, rel.company.logo_url);
         actions.push(() => select({ Id: rel.company.id, _t: "companies" }));
       }
       if (r._t === "people" && rel.people?.length) {
@@ -1521,6 +1528,8 @@ function renderJobSearchResult(o) {
       ${line("Jobs found", o.found)}
       ${line("Added to Job board", o.inserted)}
       ${line("Skipped — already in the base", o.duplicates)}
+      ${line("New companies added", o.companies?.inserted)}
+      ${line("Companies enriched (logo, website…)", o.companies?.updated)}
       <div class="ir-row"><span>Actual cost charged</span><strong>${cost}</strong></div>
     </div>
     <div class="modal-actions">
@@ -1680,7 +1689,8 @@ function feedLine(f) {
     case "restore": return `restored ${name}`;
     case "import": return `imported <b>${esc(f.to_value || "a file")}</b>` +
       (m.inserted ? ` <span class="feed-what">(${JSON.stringify(m.inserted).replace(/[{}"]/g, "")})</span>` : "");
-    case "jobsearch": return `ran a job search <span class="feed-what">(${m.found ?? "?"} found, ${m.inserted ?? "?"} new)</span>`;
+    case "jobsearch": return `ran a job search <span class="feed-what">(${m.found ?? "?"} found, ${m.inserted ?? "?"} new${
+      m.companies ? `, ${m.companies} compan${m.companies === 1 ? "y" : "ies"}` : ""})</span>`;
     default: return esc(f.action);
   }
 }

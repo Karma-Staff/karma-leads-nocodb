@@ -44,7 +44,7 @@ const MAX_BATCH = 500;
 const FIELD_KEYS = new Set(["name", "company", "title", "contact",
   "contact_title", "website", "job_url", "category", "industry", "employees",
   "revenue", "certs", "city", "state", "phone", "email", "phone_key",
-  "source", "source_file", "date_added", "notes"]);
+  "logo_url", "source", "source_file", "date_added", "notes"]);
 const INT_KEYS = new Set(["employees", "revenue", "certs"]);
 const KINDS = new Set(["company", "person", "job"]);
 

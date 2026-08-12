@@ -152,6 +152,19 @@ any other endpoint; revoke/rotate via `cli.js`). The pipeline reads
 `KARMA_API_URL`/`KARMA_API_TOKEN` from the environment, never source files,
 and NEVER connects to Postgres directly.
 
+## Job search also writes companies
+
+`POST /api/job-search` (`server/jobsearch.js resolveCompanies()`) upserts a
+`company` lead for every organization in the scrape — logo (`leads.logo_url`),
+website, industry, headcount, and the org's LinkedIn **HQ** city/state (never
+the posting's location) — and links each new job via `company_lead_id`.
+Matching keeps the franchise guards: name+city keys (`lead_keys`) against the
+whole base; bare organization name only among `source = 'Job board'` companies
+(within one job board the org name is one LinkedIn entity). On a match only
+blank fields are backfilled — a scrape never overwrites curated data. The
+front end overlays `logo_url` on the initials avatar and falls back to
+initials if the URL goes stale.
+
 ## Dedupe: franchises are not duplicates
 
 The identity logic lives in **`server/dedupe.js`** (extracted verbatim from the
