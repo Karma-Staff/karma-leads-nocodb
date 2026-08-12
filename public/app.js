@@ -1596,18 +1596,23 @@ async function doRestore(r) {
 
 /* ---------------- Team activity (admin) ----------------
    Reads /api/activity — the append-only log the API writes on every mutation.
-   Two blocks, per the manager's brief: activity over time (daily bars, split
-   per person) and a live feed with click-through to the lead. The log starts
+   The default view counts status changes only — the number the manager
+   actually watches; opens, notes and favorites drowned it out. The Logs
+   button flips the same two blocks (daily bars split per person, live feed
+   with click-through to the lead) to the unfiltered log. The log starts
    at the migration cutover, and the empty state says so plainly rather than
    showing a convincing-looking flat chart. */
 const ACT_SLOTS = 8;                     // --cat-1..8, validated in both themes
+let actFull = false;                     // false = status changes, true = Logs
 
 async function loadStats() {
   const el = $("stats-body");
   if (!el) return;
+  $("act-logs")?.setAttribute("aria-pressed", String(actFull));
   el.innerHTML = `<p class="act-empty">Loading the log…</p>`;
   try {
-    renderStats(await api(`/api/activity?days=${$("act-days")?.value || 30}`));
+    renderStats(await api(
+      `/api/activity?days=${$("act-days")?.value || 30}${actFull ? "&full=1" : ""}`));
   } catch (e) {
     el.innerHTML = `<p class="act-empty">Could not load activity (${esc(e.message)})</p>`;
   }
@@ -1639,7 +1644,7 @@ function actChart(d, slots) {
       bars += `<rect x="${x}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}"
         height="${Math.max(bh - 1, 0.5).toFixed(1)}"
         fill="${actColor(slots.get(who))}"
-        ><title>${esc(day.date)} — ${esc(who)}: ${n} action${n === 1 ? "" : "s"}</title></rect>`;
+        ><title>${esc(day.date)} — ${esc(who)}: ${n} ${d.full ? "action" : "status change"}${n === 1 ? "" : "s"}</title></rect>`;
     }
   });
   return `<div class="act-chart">
@@ -1689,20 +1694,22 @@ function renderStats(d) {
   const el = $("stats-body");
   const slots = actSlots(d.perPerson);
   if (!d.total) {
-    el.innerHTML = `<div class="act-card"><p class="act-empty">
-      Nothing in the log for this window. Activity is recorded from the moment
-      the new system went live — as the team opens leads, sets statuses and
-      writes notes, it shows up here.</p></div>`;
+    el.innerHTML = `<div class="act-card"><p class="act-empty">${d.full
+      ? `Nothing in the log for this window. Activity is recorded from the
+         moment the new system went live — as the team opens leads, sets
+         statuses and writes notes, it shows up here.`
+      : `No status changes in this window. The Logs button shows everything
+         else the team did — opens, notes, favorites, imports.`}</p></div>`;
     return;
   }
   el.innerHTML = `
     <div class="act-card">
-      <h4>Actions per day — ${d.total.toLocaleString()} in the last ${d.days} days</h4>
+      <h4>${d.full ? "Actions" : "Status changes"} per day — ${d.total.toLocaleString()} in the last ${d.days} days</h4>
       ${actChart(d, slots)}
       ${actLegend(d.perPerson, slots)}
     </div>
     <div class="act-card">
-      <h4>Latest activity</h4>
+      <h4>${d.full ? "Latest activity" : "Latest status changes"}</h4>
       ${d.feed.map((f, i) => `
         <div class="feed-row${f.lead_id && f.lead_kind ? "" : " no-lead"}" data-fi="${i}">
           <span class="avatar avatar-sm" style="background:${avColor(f.actor)}">${esc(initials(f.actor))}</span>
@@ -1891,6 +1898,7 @@ function wire() {
   on("segment-back", "click", exitSegment);
   on("act-days", "change", loadStats);
   on("act-refresh", "click", loadStats);
+  on("act-logs", "click", () => { actFull = !actFull; loadStats(); });
   on("import-btn", "click", openImportModal);
   on("job-search-btn", "click", openJobSearchConfirm);
   on("job-search-settings", "click", openJobSearchSettings);

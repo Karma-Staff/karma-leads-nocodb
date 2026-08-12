@@ -251,6 +251,11 @@ a:hover { text-decoration: underline; }
   display: flex; align-items: center; justify-content: space-between;
   padding: 14px 18px 10px; border-bottom: 1px solid var(--border);
 }
+/* the Logs toggle: pressed = the unfiltered log is showing */
+#act-logs[aria-pressed="true"] {
+  border-color: var(--accent); color: var(--accent-ink);
+  background: var(--accent-soft);
+}
 .stats-body { flex: 1; overflow-y: auto; padding: 16px 18px; }
 .act-card {
   border: 1px solid var(--border); border-radius: var(--radius);

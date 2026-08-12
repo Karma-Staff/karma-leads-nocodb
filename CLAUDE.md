@@ -114,6 +114,10 @@ client-reported event is `open` (it's a read). Nothing ever updates or deletes
 log rows; the Recent tab's per-user trail (`recents` table, 50 rows, deduped)
 is a separate thing and clearing it does not touch the log.
 
+The tab's **default view is status changes only** — everything is still
+logged, but `/api/activity` filters to `action = 'status'` unless `full=1`;
+the Logs toggle in the tab header flips to the unfiltered feed.
+
 NocoDB's own audit (`nc_audit_v2`) stays off — it once grew to 1.3 GB.
 
 ## Lead identity
