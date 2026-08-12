@@ -7,7 +7,7 @@
 <!-- geometric K, drawn rather than typeset, so it matches the mark in the app -->
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%232f54eb'/><path d='M11 7.5v17M11 16l9.5-8.5M11 16l9.5 8.5' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round' fill='none'/></svg>">
 <!-- bump ?v= whenever app.js/app.css change so no one gets a half-old app -->
-<link rel="stylesheet" href="app.css?v=29">
+<link rel="stylesheet" href="app.css?v=31">
 </head>
 <body>
 
@@ -193,6 +193,27 @@
             <option>Qualified</option><option>Not interested</option>
           </select>
         </label>
+        <!-- Bulk actions (admin), in the filter row. Select is a mode: off,
+             the list is exactly what it always was; on, every row grows a
+             checkbox and the three actions appear beside the toggle. The
+             checkbox column and these buttons are presentation only — every
+             /api/bulk route checks the role server-side. -->
+        <div class="bulk-tools admin-only hidden" id="bulk-tools">
+          <button type="button" id="bulk-toggle" class="bulk-toggle"
+                  aria-pressed="false" title="Select several leads at once">
+            <span class="ctl-ic">☑</span>Select</button>
+          <label class="bulk-pick-all hidden" id="bulk-pick-all"
+                 title="Select every lead on this page">
+            <input type="checkbox" id="bulk-all">
+            <span id="bulk-count">none selected</span>
+          </label>
+          <button type="button" id="bulk-assign" class="bulk-act hidden" disabled
+                  title="Assign the selected leads to someone">Assign</button>
+          <button type="button" id="bulk-dnc" class="bulk-act hidden" disabled
+                  title="DNC — ban the selected leads' phone numbers">DNC</button>
+          <button type="button" id="bulk-delete" class="bulk-act danger hidden"
+                  disabled title="Move the selected leads to the trash bin">Delete</button>
+        </div>
       </div>
       <div id="lead-list" class="lead-list"></div>
       <div class="pager">
@@ -266,6 +287,6 @@
   </div>
 </div>
 
-<script src="app.js?v=28"></script>
+<script src="app.js?v=30"></script>
 </body>
 </html>

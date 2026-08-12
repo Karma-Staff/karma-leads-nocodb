@@ -428,6 +428,43 @@ a:hover { text-decoration: underline; }
 .ctl.on { border-color: var(--accent); background: var(--accent-soft); }
 .ctl.on select, .ctl.on .ctl-ic { color: var(--accent-ink); }
 
+/* ---------- bulk selection, in the filter row (admin) ----------
+   The toggle wears the same chip as the filters beside it — it is a mode you
+   set on the list, like sort or state. Its actions only exist while the mode
+   is on, so the row is unchanged for anyone who never selects. */
+.bulk-tools {
+  display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin-left: auto;
+}
+.bulk-toggle {
+  display: inline-flex; align-items: center; gap: 5px;
+  border: 1px solid var(--border); border-radius: 4px;
+  background: var(--surface-2); padding: 5px 9px;
+  font-size: 12.5px; font-weight: 600; color: var(--ink);
+}
+.bulk-toggle:hover { border-color: var(--ink-3); }
+.bulk-toggle.on {
+  border-color: var(--accent); background: var(--accent-soft); color: var(--accent-ink);
+}
+.bulk-toggle.on .ctl-ic { color: var(--accent-ink); }
+.bulk-pick-all {
+  display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+  font-size: 12.5px; color: var(--ink-2); white-space: nowrap;
+}
+.bulk-pick-all input {
+  width: 14px; height: 14px; accent-color: var(--accent); cursor: pointer;
+}
+.bulk-act {
+  border: 1px solid var(--border); border-radius: 4px; background: var(--surface);
+  padding: 5px 11px; font-size: 12.5px; font-weight: 600;
+}
+.bulk-act:hover:not(:disabled) { border-color: var(--accent); color: var(--accent-ink); }
+.bulk-act.danger:hover:not(:disabled) { border-color: #b3261e; color: #b3261e; }
+:root[data-theme="dark"] .bulk-act.danger:hover:not(:disabled) {
+  border-color: #ffb4ab; color: #ffb4ab;
+}
+.bulk-act:disabled { opacity: .45; cursor: default; }
+
 .lead-list { flex: 1; overflow-y: auto; }
 .lead-row {
   display: flex; gap: 12px; align-items: flex-start;
@@ -436,6 +473,14 @@ a:hover { text-decoration: underline; }
 }
 .lead-row:hover { background: var(--surface-2); }
 .lead-row.selected { background: var(--accent-soft); }
+/* the tick box only exists while Select is on, so it is simply visible —
+   nothing to reveal on hover */
+.row-pick {
+  flex: 0 0 auto; width: 15px; height: 15px; margin-top: 2px;
+  accent-color: var(--accent); cursor: pointer;
+}
+.lead-row.picked { background: var(--accent-soft); }
+body.d-compact .row-pick { margin-top: 0; }
 .lead-row-main { flex: 1; min-width: 0; }
 .lead-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lead-name .co { color: var(--ink-2); font-weight: 400; }
@@ -886,6 +931,37 @@ body.resizing .lead-row, body.resizing .splitter { pointer-events: none; }
 /* the destructive action leads the row, so it must not look like Close */
 #trash-empty { margin-right: auto; }
 #trash-empty:disabled { opacity: .45; cursor: default; }
+
+/* ---------- assign a selection: the owner search ----------
+   Same row rhythm as the team list; the whole row is the button, because
+   picking a person is the only thing this list does. */
+.owner-q {
+  width: 100%; padding: 9px 11px; margin-bottom: 10px;
+  border: 1px solid var(--border); border-radius: 5px;
+  background: var(--surface-2); font-size: 13.5px;
+}
+.owner-q:focus { outline: none; border-color: var(--accent); }
+.owner-results {
+  display: flex; flex-direction: column; gap: 2px;
+  max-height: 42vh; overflow-y: auto; margin-bottom: 14px;
+}
+.owner-row {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 7px 8px; border-radius: 4px; text-align: left;
+  border: 1px solid transparent;
+}
+.owner-row:hover { background: var(--surface-2); }
+.owner-row.on { background: var(--accent-soft); border-color: var(--accent); }
+.owner-id { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.owner-name { font-size: 13.5px; font-weight: 600; }
+.owner-sub {
+  color: var(--ink-2); font-size: 12px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.owner-none {
+  background: var(--surface-2); color: var(--ink-3);
+  border: 1px dashed var(--border); font-size: 15px;
+}
 
 /* ---------- import drop zone ---------- */
 .dropzone {

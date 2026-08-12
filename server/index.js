@@ -49,6 +49,9 @@ app.use(require("./recents").router);
 app.use(require("./users").router);
 app.use(require("./jobsearch").router);
 app.use(require("./imports").router);
+/* bulk actions on a ticked selection (admin) — mounted at /api/bulk, clear of
+   leads.js's /api/leads/:id routes */
+app.use(require("./bulk").router);
 
 /* the trash bin, plus its 30-day sweep — mounted after leads so the leads
    router's requireUser has already run for /api/leads/:id paths */

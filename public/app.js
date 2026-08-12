@@ -16,6 +16,11 @@ const S = {
   total: 0,
   cursors: [null],     // cursors[n] reaches page n+1 — keyset paging, not offset
   sel: null,           // {row, tkey}
+  // Select is a mode an admin turns on in the filter row; the selection it
+  // gathers is lead id -> {name, kind}, kept across paging (that's the point
+  // of it) and dropped whenever the list itself changes.
+  selectMode: false,
+  picked: new Map(),
   recents: [],         // rows already joined with their leads — see loadRecents()
   segment: null,       // {category, state, label} while browsing one segment
 };
@@ -426,7 +431,10 @@ function exitSegment() {
 }
 
 async function loadList(resetPage = false) {
-  if (resetPage) { S.page = 1; S.cursors = [null]; }
+  // a new list is a new selection: paging keeps the ticks, changing tab,
+  // search, filter or sort drops them rather than acting on rows nobody can
+  // still see
+  if (resetPage) { S.page = 1; S.cursors = [null]; S.picked.clear(); }
   const cfg = TABS[S.tab];
   // Team activity reads the log, not the leads table — no list, no pager
   if (cfg.stats) return loadStats();
@@ -613,6 +621,7 @@ function reachHtml(r) {
 
 function renderList() {
   const el = $("lead-list");
+  const canPick = isAdmin() && S.selectMode;
   el.innerHTML = S.list.map((r, i) => {
     const name = displayName(r, r._t);
     // jobs carry the company in the subtitle instead, so the title stays readable
@@ -625,8 +634,12 @@ function renderList() {
     const date = r._touchedAt || (r._t === "jobs" ? r[TABS[r._t].dateField] : "");
     const side = date ? `<span class="lead-date">${relTime(date)}</span>` : reachHtml(r);
     const sel = S.sel && S.sel.row.Id === r.Id && S.sel.tkey === r._t ? " selected" : "";
+    const picked = S.picked.has(r.Id);
     return `
-    <div class="lead-row${sel}" data-i="${i}">
+    <div class="lead-row${sel}${picked ? " picked" : ""}" data-i="${i}">
+      ${canPick ? `<input type="checkbox" class="row-pick" data-pick="${i}"
+              ${picked ? "checked" : ""} title="Select — shift-click for a range"
+              aria-label="Select ${esc(name)}">` : ""}
       ${avatarHtml(name, r.Logo)}
       <div class="lead-row-main">
         <div class="lead-name" title="${esc(full)}"><span class="status-dot ${statusDotCls(r.Status)}" title="${esc(r.Status || "New")}"></span>${esc(name)}${co}</div>
@@ -651,6 +664,122 @@ function renderList() {
       e.stopPropagation();                       // don't open the lead
       toggleFavorite(S.list[+star.dataset.fav]);
     }));
+  el.querySelectorAll("[data-pick]").forEach((box) =>
+    box.addEventListener("click", (e) => {
+      e.stopPropagation();                       // ticking is not opening
+      onPick(+box.dataset.pick, box.checked, e.shiftKey);
+    }));
+  renderBulkTools();
+}
+
+/* ---------------- bulk selection (admin) ----------------
+   Select is a mode, toggled from the filter row, because a permanent checkbox
+   column turns a reading list into a form. With it on, every row grows a box
+   and the three things that can happen to a selection — assign an owner, ban
+   the numbers, bin the leads — sit beside the toggle. They are the same three
+   mutations the reading pane offers on one lead, applied by the server under
+   the same rules (server/bulk.js). Members never see any of it, and the routes
+   403 them anyway. */
+const isAdmin = () => S.me?.role === "admin";
+const BULK_MAX = 500;                 // keep in step with MAX_IDS in server/bulk.js
+let lastPick = null;                  // row index, for shift-click ranges
+
+function setPick(r, on) {
+  if (!r) return;
+  if (on) {
+    if (!S.picked.has(r.Id) && S.picked.size >= BULK_MAX) return;
+    S.picked.set(r.Id, { name: displayName(r, r._t), kind: r._t });
+  } else S.picked.delete(r.Id);
+}
+
+function onPick(i, on, shift) {
+  if (shift && lastPick !== null && lastPick !== i) {
+    const [a, b] = lastPick < i ? [lastPick, i] : [i, lastPick];
+    for (let k = a; k <= b; k++) setPick(S.list[k], on);
+  } else {
+    setPick(S.list[i], on);
+  }
+  lastPick = i;
+  if (S.picked.size >= BULK_MAX)
+    toast(`${BULK_MAX} leads is the most one action can take`);
+  paintPicks();
+}
+
+/* Rows are repainted in place, never re-rendered: replacing the list's HTML
+   would throw a scrolled list back to the top halfway through a selection. */
+function paintPicks() {
+  $("lead-list")?.querySelectorAll("[data-pick]").forEach((box) => {
+    const r = S.list[+box.dataset.pick];
+    const on = !!r && S.picked.has(r.Id);
+    box.checked = on;
+    box.closest(".lead-row")?.classList.toggle("picked", on);
+  });
+  renderBulkTools();
+}
+
+/* the filter row's bulk half: the toggle is always there for an admin, the
+   count and the three actions only while the mode is on */
+function renderBulkTools() {
+  const tools = $("bulk-tools");
+  if (!tools || !isAdmin()) return;
+  const on = S.selectMode;
+  const n = S.picked.size;
+  const onPage = S.list.filter((r) => S.picked.has(r.Id)).length;
+  const toggle = $("bulk-toggle");
+  toggle.classList.toggle("on", on);
+  toggle.setAttribute("aria-pressed", String(on));
+  toggle.title = on
+    ? "Done selecting — hides the checkboxes and clears the selection"
+    : "Select several leads at once";
+  $("bulk-pick-all").classList.toggle("hidden", !on);
+  ["bulk-assign", "bulk-dnc", "bulk-delete"].forEach((id) =>
+    $(id).classList.toggle("hidden", !on));
+  if (!on) return;
+  $("bulk-count").textContent = n ? `${n.toLocaleString()} selected` : "none selected";
+  const all = $("bulk-all");
+  all.checked = !!S.list.length && onPage === S.list.length;
+  all.indeterminate = onPage > 0 && onPage < S.list.length;
+  $("bulk-assign").disabled = !n;
+  $("bulk-delete").disabled = !n;
+  // the DNC tab lists leads whose numbers are already banned
+  $("bulk-dnc").disabled = !n || !!TABS[S.tab].removedTab;
+}
+
+/* Turning the mode off drops the selection — leaving ticks alive under a
+   list with no checkboxes is how a later click deletes something nobody
+   remembers picking. */
+function setSelectMode(on) {
+  S.selectMode = !!on;
+  localStorage.setItem("kl_select_mode", S.selectMode ? "1" : "");
+  if (!S.selectMode) {
+    S.picked.clear();
+    lastPick = null;
+  }
+  renderList();                        // rows gain or lose their checkbox
+}
+
+function clearPicks() {
+  S.picked.clear();
+  lastPick = null;
+  paintPicks();
+}
+
+/* every bulk action ends the same way: the selection is spent, the list and
+   the tiles are stale, and the reading pane may be showing a lead that just
+   left the view */
+async function afterBulk(ids, { closeDetail = false } = {}) {
+  const openId = S.sel?.row?.Id;
+  const hitOpen = openId != null && ids.includes(openId);
+  clearPicks();
+  closeModal();
+  if (hitOpen && closeDetail) {
+    S.sel = null;
+    $("detail").classList.add("hidden");
+    $("detail-empty").classList.remove("hidden");
+  }
+  await loadList();
+  refreshCounts();
+  if (hitOpen && !closeDetail) select(S.sel ? S.sel.row : { Id: openId });
 }
 
 /* ---------------- detail ---------------- */
@@ -1966,6 +2095,242 @@ async function renderTrashList() {
     }));
 }
 
+/* ---------------- bulk action modals (admin) ----------------
+   Three modals over server/bulk.js, one per action in the filter row. They
+   deliberately mirror their single-lead twins above: the same words, the same
+   blast-radius line before the same destructive click. The only new idea is
+   the owner search — assigning is a pick from a list (the team, plus the
+   owners already on leads), never a free-text box, because leads.owner is
+   matched on equality and "Maria", "maria" and "maria@karmastaff.com" are
+   three different work queues. */
+
+const pickedIds = () => [...S.picked.keys()];
+
+/* name the first few: a destructive confirm should be about leads someone
+   recognises, not about a number */
+function pickedNames(max = 3) {
+  const names = [...S.picked.values()].map((p) => p.name);
+  const head = names.slice(0, max).join(", ");
+  return names.length > max
+    ? `${head} and ${(names.length - max).toLocaleString()} more` : head;
+}
+
+function bulkError(msg) {
+  const err = $("bulk-error");
+  if (!err) return;
+  err.textContent = msg;
+  err.classList.remove("hidden");
+}
+
+/* one call answers both destructive modals; a failed preview must not block
+   the action, so it falls back to what we already know */
+async function bulkPreview(ids) {
+  try {
+    return await api("/api/bulk/preview",
+      { method: "POST", body: JSON.stringify({ ids }) });
+  } catch {
+    return { leads: ids.length, dnc: ids.length, jobs: 0 };
+  }
+}
+
+const leadsWord = (n) => `${n.toLocaleString()} lead${n === 1 ? "" : "s"}`;
+
+async function openAssignModal() {
+  const ids = pickedIds();
+  if (!ids.length) return;
+  let chosen = null;                     // an /api/owners row, or {clear:true}
+  $("modal-title").textContent = `Assign ${leadsWord(ids.length)}`;
+  $("modal-body").innerHTML = `
+    <p class="modal-sub">Search the team and the owners already on leads —
+      picking an existing name keeps one person from becoming three owner
+      filters.<br>Selected: ${esc(pickedNames())}</p>
+    <input id="owner-q" class="owner-q" type="search" autocomplete="off"
+           placeholder="Search a name or email…">
+    <div id="owner-results" class="owner-results">
+      <div class="modal-sub">Loading…</div></div>
+    <div id="bulk-error" class="login-error hidden"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn-secondary" id="modal-cancel">Cancel</button>
+      <button type="button" class="btn-primary" id="assign-go" disabled>Assign</button>
+    </div>`;
+  $("modal-backdrop").classList.remove("hidden");
+  $("modal-cancel").addEventListener("click", closeModal);
+  const go = $("assign-go");
+
+  const paintChoice = () => {
+    go.disabled = !chosen;
+    go.textContent = !chosen ? "Assign"
+      : chosen.clear ? `Unassign ${leadsWord(ids.length)}`
+        : `Assign to ${chosen.label}`;
+  };
+  const mark = (btn) => {
+    $("owner-results").querySelectorAll(".owner-row")
+      .forEach((x) => x.classList.toggle("on", x === btn));
+    paintChoice();
+  };
+  const render = (list) => {
+    const el = $("owner-results");
+    el.innerHTML = list.map((o, i) => {
+      /* the value is always shown when it isn't the label: it is the string
+         that lands in the owner column and drives the owner filter */
+      const sub = [o.label === o.value ? null : o.value,
+        o.team ? "team member" : "already on leads",
+        o.leads ? `${leadsWord(o.leads)} owned` : null].filter(Boolean).join(" · ");
+      return `
+      <button type="button" class="owner-row" data-o="${i}">
+        ${avatarHtml(o.label, null, "avatar avatar-sm")}
+        <span class="owner-id">
+          <span class="owner-name">${esc(o.label)}</span>
+          <span class="owner-sub">${esc(sub)}</span>
+        </span>
+      </button>`;
+    }).join("") || `<div class="modal-sub">Nobody matches. Teammates appear
+      here once they have signed in at least once.</div>`;
+    // unassigning is a real answer to "who owns these", so it is a row too
+    el.insertAdjacentHTML("beforeend", `
+      <button type="button" class="owner-row" data-clear="1">
+        <span class="avatar avatar-sm owner-none">–</span>
+        <span class="owner-id">
+          <span class="owner-name">Leave unassigned</span>
+          <span class="owner-sub">clears the owner on the selected leads</span>
+        </span>
+      </button>`);
+    el.querySelectorAll("[data-o]").forEach((b) =>
+      b.addEventListener("click", () => { chosen = list[+b.dataset.o]; mark(b); }));
+    el.querySelectorAll("[data-clear]").forEach((b) =>
+      b.addEventListener("click", () => { chosen = { clear: true }; mark(b); }));
+  };
+  const search = async (q) => {
+    try { render((await api(`/api/owners?q=${encodeURIComponent(q)}`)).list || []); }
+    catch (ex) { $("owner-results").innerHTML = ""; bulkError(ex.message); }
+  };
+
+  let debounce;
+  $("owner-q").addEventListener("input", (e) => {
+    chosen = null;
+    paintChoice();
+    clearTimeout(debounce);
+    const q = e.target.value.trim();
+    debounce = setTimeout(() => search(q), 200);
+  });
+  go.addEventListener("click", async () => {
+    if (!chosen) return;
+    go.disabled = true;
+    go.textContent = "Saving…";
+    try {
+      const out = await api("/api/bulk/assign", {
+        method: "POST",
+        body: JSON.stringify({ ids, owner: chosen.clear ? "" : chosen.value }),
+      });
+      toast(out.affected
+        ? `${leadsWord(out.affected)} ${chosen.clear
+          ? "unassigned" : `assigned to ${chosen.label}`}`
+        : "Nothing to change — they already had that owner");
+      await afterBulk(ids);
+    } catch (ex) {
+      paintChoice();
+      bulkError(ex.message);
+    }
+  });
+  await search("");
+  $("owner-q").focus();
+}
+
+async function openBulkDncModal() {
+  const ids = pickedIds();
+  if (!ids.length) return;
+  const pv = await bulkPreview(ids);
+  const extra = Math.max(0, pv.dnc - pv.leads);
+  $("modal-title").textContent = `DNC ${leadsWord(ids.length)}`;
+  $("modal-body").innerHTML = `
+    <p class="modal-note">
+      This bans the phone numbers on the selected leads and removes
+      <b>${leadsWord(pv.dnc)}</b>${extra
+        ? ` — the ${pv.leads} selected plus <b>${leadsWord(extra)}</b> sharing
+            those numbers, across Companies, People and Job board`
+        : ""}. Future imports of those numbers stay out too.
+      ${extra > pv.leads ? `<br><b>Note:</b> that is far more than you picked —
+        check none of these are shared switchboards.` : ""}
+    </p>
+    <p class="modal-sub">Selected: ${esc(pickedNames())}</p>
+    <label>Reason (optional)
+      <input id="dnc-reason" placeholder="e.g. asked not to be contacted">
+    </label>
+    <div id="bulk-error" class="login-error hidden"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn-secondary" id="modal-cancel">Cancel</button>
+      <button type="button" class="btn-danger" id="dnc-go">Remove &amp; ban</button>
+    </div>`;
+  $("modal-backdrop").classList.remove("hidden");
+  $("modal-cancel").addEventListener("click", closeModal);
+  $("dnc-go").addEventListener("click", async (e) => {
+    const btn = e.target;
+    btn.disabled = true;
+    btn.textContent = "Removing…";
+    try {
+      const out = await api("/api/bulk/dnc", {
+        method: "POST",
+        body: JSON.stringify({ ids, reason: $("dnc-reason").value }),
+      });
+      toast(`Removed ${leadsWord(out.affected)}` +
+        (out.numbers ? ` · ${out.numbers} number${out.numbers === 1 ? "" : "s"} banned` : ""));
+      await afterBulk(ids, { closeDetail: true });
+    } catch (ex) {
+      btn.disabled = false;
+      btn.textContent = "Remove & ban";
+      bulkError(ex.message);
+    }
+  });
+}
+
+async function openBulkDeleteModal() {
+  const ids = pickedIds();
+  if (!ids.length) return;
+  const pv = await bulkPreview(ids);
+  const total = pv.leads + (pv.jobs || 0);
+  $("modal-title").textContent = `Delete ${leadsWord(ids.length)}`;
+  $("modal-body").innerHTML = `
+    <p class="modal-note">
+      <b>${leadsWord(pv.leads)}</b> go to the trash bin${pv.jobs
+        ? `, and so do <b>${pv.jobs} job posting${pv.jobs === 1 ? "" : "s"}</b>
+           belonging to the companies you picked` : ""}. They disappear from
+      every list, count and search straight away.
+    </p>
+    <p class="modal-sub">Selected: ${esc(pickedNames())}</p>
+    <div class="import-report">
+      <div class="ir-row"><span>Recoverable from</span>
+        <strong>Trash — in the user menu</strong></div>
+      <div class="ir-row"><span>Destroyed for good</span>
+        <strong>${TRASH_DAYS} days after deletion</strong></div>
+      <div class="ir-row"><span>Phone numbers</span>
+        <strong>Not banned — that's DNC</strong></div>
+    </div>
+    <div id="bulk-error" class="login-error hidden"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn-secondary" id="modal-cancel">Cancel</button>
+      <button type="button" class="btn-danger" id="bulk-delete-go">Delete ${
+        leadsWord(total)}</button>
+    </div>`;
+  $("modal-backdrop").classList.remove("hidden");
+  $("modal-cancel").addEventListener("click", closeModal);
+  $("bulk-delete-go").addEventListener("click", async (e) => {
+    const btn = e.target;
+    btn.disabled = true;
+    btn.textContent = "Deleting…";
+    try {
+      const out = await api("/api/bulk/delete", {
+        method: "POST", body: JSON.stringify({ ids }),
+      });
+      toast(`Moved ${leadsWord(out.affected)} to the trash`);
+      await afterBulk(ids, { closeDetail: true });
+    } catch (ex) {
+      btn.disabled = false;
+      btn.textContent = `Delete ${leadsWord(total)}`;
+      bulkError(ex.message);
+    }
+  });
+}
+
 /* ---------------- Team activity (admin) ----------------
    Reads /api/activity — the append-only log the API writes on every mutation.
    The default view counts status changes only — the number the manager
@@ -2043,6 +2408,23 @@ function actLegend(perPerson, slots) {
 function feedLine(f) {
   const name = f.lead_name ? `<b>${esc(f.lead_name)}</b>` : "a lead";
   const m = f.meta || {};
+  /* A bulk action is one log row for the whole selection (server/bulk.js) —
+     writing 300 of them would push every other line off this feed. lead_name
+     is already "300 leads", so these read as sentences; there is no single
+     lead to click through to, which .no-lead handles. */
+  if (m.bulk) {
+    switch (f.action) {
+      case "owner": return `assigned ${name} to <b>${esc(f.to_value)}</b>` +
+        ` <span class="feed-what">(in bulk)</span>`;
+      case "remove": return `banned ${m.numbers ?? "?"} number${m.numbers === 1 ? "" : "s"}` +
+        ` and removed ${name}` +
+        (f.to_value ? ` <span class="feed-what">(${esc(f.to_value)})</span>` : "");
+      case "delete": return `deleted ${name} to the trash` +
+        (m.jobs > 0 ? ` <span class="feed-what">including ${m.jobs} job posting${
+          m.jobs === 1 ? "" : "s"}</span>` : "");
+      default: break;
+    }
+  }
   switch (f.action) {
     case "open": return `opened ${name}`;
     case "status": return `set ${name} to <b>${esc(f.to_value)}</b>` +
@@ -2306,6 +2688,18 @@ function wire() {
     catch (e) { console.warn("[karma] could not clear recents", e); }
     toast("Recent activity cleared");
   });
+  // the bulk half of the filter row — admin-only in the markup, and on the routes
+  on("bulk-toggle", "click", () => setSelectMode(!S.selectMode));
+  on("bulk-all", "change", (e) => {
+    S.list.forEach((r) => setPick(r, e.target.checked));
+    lastPick = null;
+    if (e.target.checked && S.picked.size >= BULK_MAX)
+      toast(`${BULK_MAX} leads is the most one action can take`);
+    paintPicks();
+  });
+  on("bulk-assign", "click", openAssignModal);
+  on("bulk-dnc", "click", openBulkDncModal);
+  on("bulk-delete", "click", openBulkDeleteModal);
   on("segment-back", "click", exitSegment);
   on("act-days", "change", loadStats);
   on("act-refresh", "click", loadStats);
@@ -2334,6 +2728,9 @@ async function boot() {
   if (S.me.role === "admin") {
     document.querySelectorAll(".admin-only").forEach((el) =>
       el.classList.remove("hidden"));
+    // Select stays where it was left, like density and sort. renderBulkTools()
+    // paints the toggle when the first list renders.
+    S.selectMode = !!localStorage.getItem("kl_select_mode");
     loadApifyUsage();       // admin surface — a member asking would just 403
   }
   await loadRecents();       // the Recent tab is served from this, so fetch it first

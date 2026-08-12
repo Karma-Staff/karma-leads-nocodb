@@ -27,7 +27,15 @@ Run: `docker compose up -d` → `node server/migrate.js` → `node server/index.
   `server/leads.js`, the FILTERs in `server/counts.js`, `FOCUS_TEST` in
   `public/app.js`. Change one, change all three, or a tile says 412 and opens
   380.
-- `server/imports.js` is the only bulk write path — idempotent,
+- **Bulk actions repeat the single-lead rules, they never shortcut them.**
+  `server/bulk.js` (`/api/bulk/*`, admin) is assign / DNC / delete over a
+  ticked selection: the DNC still blocklists each number and sweeps every lead
+  sharing it, the delete still takes a company's job postings and leaves the
+  batch on one `deleted_at` so the bin restores exactly that sweep. It writes
+  ONE summary row to `activity_log` per action (`meta.bulk`, action names kept
+  inside the existing CHECK list) — 300 per-lead rows would bury the feed — and
+  touches no recents for the same reason.
+- `server/imports.js` is the only bulk *ingest* path — idempotent,
   blank-never-overwrites. The pipeline reaches it through
   `KARMA_API_URL`/`KARMA_API_TOKEN`, never Postgres directly.
 
@@ -39,6 +47,10 @@ Run: `docker compose up -d` → `node server/migrate.js` → `node server/index.
 - Front end: state in one `S` object; `fromApi()` is the whole snake_case →
   title-case translation; paging is keyset; KPIs are one `/api/counts`.
   **Bump the `?v=` cache-busters in `index.html` on every markup/script change.**
+- `leads.owner` is free text matched on equality, and the data holds email
+  addresses. Assigning goes through `GET /api/owners` (accounts + the owner
+  strings already on leads) so one person can't become three owner filters —
+  an account's assignable value is its **email**, never its display name.
 - Keep `.env` (compose passwords) and `.env.server` (DATABASE_URL + WorkOS)
   split — nothing that names a database goes in `.env`.
 
