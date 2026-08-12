@@ -27,9 +27,13 @@ function log(entry, client) {
   ).catch((e) => console.warn("[karma] activity log failed:", e.message));
 }
 
-/* everything the Team activity tab needs, in three queries over the window */
-async function summary(days) {
+/* everything the Team activity tab needs, in three queries over the window.
+   The tab's default view is status changes only — the log itself still
+   records everything, but opens/notes/favorites drowned out the signal the
+   manager actually watches. full=true is the Logs view: every action. */
+async function summary(days, full) {
   const n = Math.min(Math.max(Math.round(+days) || 30, 1), 365);
+  const all = !!full;
   const perDay = (await query(
     `SELECT to_char(d, 'YYYY-MM-DD') AS date,
             coalesce(jsonb_object_agg(a.actor, a.n) FILTER (WHERE a.actor IS NOT NULL),
@@ -39,25 +43,28 @@ async function summary(days) {
      LEFT JOIN (SELECT at::date AS day, actor, count(*)::int AS n
                 FROM activity_log
                 WHERE at >= current_date - ($1::int - 1)
+                  AND ($2 OR action = 'status')
                 GROUP BY 1, 2) a ON a.day = d
-     GROUP BY d ORDER BY d`, [n])).rows;
+     GROUP BY d ORDER BY d`, [n, all])).rows;
   const perPerson = (await query(
     `SELECT actor AS who, sum(n)::int AS total,
             jsonb_object_agg(action, n) AS by_action, max(last) AS last
      FROM (SELECT actor, action, count(*)::int AS n, max(at) AS last
            FROM activity_log
            WHERE at >= current_date - ($1::int - 1)
+             AND ($2 OR action = 'status')
            GROUP BY actor, action) x
-     GROUP BY actor ORDER BY total DESC`, [n])).rows;
+     GROUP BY actor ORDER BY total DESC`, [n, all])).rows;
   const feed = (await query(
     `SELECT at, actor, action, lead_id, lead_code, lead_name,
             from_value, to_value, meta,
             (SELECT kind FROM leads WHERE leads.id = a.lead_id) AS lead_kind
      FROM activity_log a
      WHERE at >= current_date - ($1::int - 1)
-     ORDER BY at DESC LIMIT 100`, [n])).rows;
+       AND ($2 OR action = 'status')
+     ORDER BY at DESC LIMIT 100`, [n, all])).rows;
   const total = perDay.reduce((s, d) => s + d.total, 0);
-  return { days: n, total, perDay, perPerson, feed };
+  return { days: n, full: all, total, perDay, perPerson, feed };
 }
 
 module.exports = { log, summary };

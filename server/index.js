@@ -52,7 +52,7 @@ app.use(require("./imports").router);
 
 const activity = require("./activity");
 app.get("/api/activity", auth.requireAdmin, async (req, res, next) => {
-  try { res.json(await activity.summary(req.query.days)); }
+  try { res.json(await activity.summary(req.query.days, req.query.full === "1")); }
   catch (e) { next(e); }
 });
 
