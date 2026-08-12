@@ -1229,7 +1229,34 @@ async function renderUsersList() {
    full filter set) and Indeed (misceres/indeed-scraper — one title + one
    location per search, no filters, but a lower per-job price). */
 const JS_LS = "kl_jobsearch";
-const JS_SCRAPERS = [["linkedin", "LinkedIn"], ["indeed", "Indeed"]];
+
+/* The two boards are not interchangeable — one costs more and returns company
+   records, the other is one-title-one-location and jobs only — so the picker is
+   a pair of full-width brand cards, not a radio pair, and the chosen board is
+   named on the 🔎 button and in the confirm step. Brand marks are drawn (the
+   nav has no emoji anywhere else either). */
+const JS_MARK = {
+  linkedin: `<svg class="board-mark" viewBox="0 0 24 24" aria-hidden="true">
+    <rect width="24" height="24" rx="4" fill="#0a66c2"/>
+    <path fill="#fff" d="M6.2 4.6a1.9 1.9 0 100 3.8 1.9 1.9 0 000-3.8zM4.5 9.9h3.4v9.6H4.5V9.9zm5.4 0h3.25v1.3h.05c.45-.82 1.56-1.68 3.22-1.68 3.45 0 4.08 2.16 4.08 4.97v5.01h-3.4v-4.44c0-1.06-.02-2.42-1.5-2.42s-1.73 1.15-1.73 2.34v4.52H9.9V9.9z"/>
+  </svg>`,
+  indeed: `<svg class="board-mark" viewBox="0 0 24 24" aria-hidden="true">
+    <rect width="24" height="24" rx="4" fill="#003a9b"/>
+    <circle cx="12" cy="6.6" r="2.2" fill="#fff"/>
+    <path fill="#fff" d="M9.85 10.1h4.3v7.1c0 1.5.5 1.9 1.35 1.9v2.1c-3.7.35-5.65-.85-5.65-4.1v-7z"/>
+  </svg>`,
+};
+const JS_BOARDS = [
+  { key: "linkedin", label: "LinkedIn", tag: "Richest data",
+    marks: ["Every advanced filter below applies",
+      "Also creates company records — logo, website, HQ, headcount",
+      "Many job titles and locations in one run"] },
+  { key: "indeed", label: "Indeed", tag: "Cheapest per job",
+    marks: ["One job title and one location per run",
+      "No advanced filters — titles and location only",
+      "Jobs only — no company records, logos or websites"] },
+];
+const JS_SCRAPERS = JS_BOARDS.map((b) => [b.key, b.label]);
 const JS_RATES_FALLBACK = {
   linkedin: { perResultUsd: 0.005, recruiterPerResultUsd: 0.015,
     limitMin: 10, limitMax: 500, limitDefault: 100 },
@@ -1307,7 +1334,18 @@ function jsSettings() {
 }
 const saveJsSettings = (s) => localStorage.setItem(JS_LS, JSON.stringify(s));
 
+/* the 🔎 button names the board it is armed with — the choice lives in
+   localStorage, so without this nothing on screen says which one runs */
+function paintBoardTag() {
+  const el = $("js-board-tag");
+  if (!el) return;
+  const s = jsSettings();
+  el.textContent = jsBoard(s);
+  el.className = "js-board-tag board-chip board-chip-" + s.scraper;
+}
+
 async function loadApifyUsage() {
+  paintBoardTag();
   try { APIFY_USAGE = await api("/api/apify-usage"); }
   catch (e) { console.warn("[karma] apify usage unavailable", e.message); }
   const el = $("credits-line");
@@ -1363,13 +1401,29 @@ function openJobSearchSettings() {
   $("modal-body").innerHTML = `
     ${usageCard()}
     <form id="js-form"${s.scraper === "indeed" ? ' class="indeed"' : ""}>
-      <div class="js-group-label">Job board</div>
-      <div class="check-grid">${JS_SCRAPERS.map(([v, l]) =>
-        `<label class="check"><input type="radio" name="js-scraper" value="${v}"
-           ${v === s.scraper ? " checked" : ""}> ${l}</label>`).join("")}</div>
-      <div class="dz-sub in-only">Indeed runs one search at a time — only the
-        first job title and the first location are used, and the advanced
-        LinkedIn filters don't apply.</div>
+      <div class="js-group-label">Job board — this changes what a search can do</div>
+      <div class="board-picker">${JS_BOARDS.map((b) => `
+        <label class="board-card board-${b.key}${b.key === s.scraper ? " on" : ""}">
+          <input type="radio" name="js-scraper" value="${b.key}"
+                 ${b.key === s.scraper ? " checked" : ""}>
+          <span class="board-head">
+            ${JS_MARK[b.key]}
+            <span class="board-name">${b.label}</span>
+            <span class="board-tick" aria-hidden="true">✓</span>
+          </span>
+          <span class="board-price">${usd(jsRates(b.key).perResultUsd * 1000)}
+            <small>per 1,000 jobs</small></span>
+          <span class="board-tag">${b.tag}</span>
+          <span class="board-marks">${b.marks.map((m) =>
+            `<span>${esc(m)}</span>`).join("")}</span>
+        </label>`).join("")}</div>
+      <div class="board-mode">
+        <span class="li-only"><strong>LinkedIn mode</strong> — every field below
+          is live, and each organization found also lands as a company lead.</span>
+        <span class="in-only"><strong>Indeed mode</strong> — only the
+          <strong>first</strong> job title and the <strong>first</strong> location
+          are sent. Posted-within and the advanced filters are switched off.</span>
+      </div>
       <label>Job titles — comma-separated, blank = any
         <input id="js-titles" value="${esc(s.titles)}"
                placeholder="Insurance Adjuster, Claims Adjuster">
@@ -1450,11 +1504,14 @@ function openJobSearchSettings() {
     const c = collect();
     // the picker doubles as a mode switch: Indeed hides the LinkedIn-only rows
     $("js-form").classList.toggle("indeed", c.scraper === "indeed");
+    document.querySelectorAll("#js-form .board-card").forEach((el) =>
+      el.classList.toggle("on", el.classList.contains("board-" + c.scraper)));
     const recruiter = c.scraper === "linkedin" && c.recruiterOnly;
     const rate = recruiter
       ? jsRates(c.scraper).recruiterPerResultUsd : jsRates(c.scraper).perResultUsd;
     const per1k = "$" + (rate * 1000).toFixed(2) + " per 1,000";
-    $("js-estimate").innerHTML = `Maximum cost on ${jsBoard(c)}:
+    $("js-estimate").innerHTML = `Maximum cost on
+      <span class="board-chip board-chip-${c.scraper}">${jsBoard(c)}</span>:
       <strong>${usd(jsMaxCost(c))}</strong>
       for up to ${c.limit} jobs${recruiter
         ? ` <span class="js-price-warn">recruiter rate — ${per1k}</span>`
@@ -1465,17 +1522,21 @@ function openJobSearchSettings() {
   $("modal-cancel").addEventListener("click", closeModal);
   $("js-reset").addEventListener("click", () => {
     localStorage.removeItem(JS_LS);
+    paintBoardTag();
     toast("Search settings reset to defaults");
     openJobSearchSettings();
   });
   $("js-save").addEventListener("click", () => {
-    saveJsSettings(collect());
-    toast("Job search settings saved");
+    const c = collect();
+    saveJsSettings(c);
+    paintBoardTag();
+    toast(`Job search settings saved — searching ${jsBoard(c)}`);
     closeModal();
   });
   $("js-form").onsubmit = (e) => {
     e.preventDefault();
     saveJsSettings(collect());
+    paintBoardTag();
     openJobSearchConfirm();
   };
 }
@@ -1505,8 +1566,18 @@ function openJobSearchConfirm() {
     ? `<div class="ir-row"><span>${label}</span><strong>${esc(val)}</strong></div>` : "";
   $("modal-title").textContent = `Search ${jsBoard(s)} jobs?`;
   $("modal-body").innerHTML = `
+    <div class="board-banner board-${s.scraper}">
+      ${JS_MARK[s.scraper]}
+      <div>
+        <div class="board-banner-name">${jsBoard(s)}</div>
+        <div class="board-banner-sub">${indeed
+          ? "One title, one location, jobs only — no company records"
+          : "Full filters — organizations also land as company leads"}</div>
+      </div>
+      <button type="button" class="board-swap" id="js-swap">Use ${indeed
+        ? "LinkedIn" : "Indeed"} instead</button>
+    </div>
     <div class="import-report">
-      ${row("Job board", jsBoard(s))}
       ${row("Job titles", brief(titles, 3) || "Any")}
       ${row("Locations", brief(locations, 2) || "Anywhere")}
       ${indeed ? "" : row("Company keywords", brief(keywords, 3))}
@@ -1526,6 +1597,13 @@ function openJobSearchConfirm() {
   $("modal-backdrop").classList.remove("hidden");
   $("modal-cancel").addEventListener("click", closeModal);
   $("js-edit").addEventListener("click", openJobSearchSettings);
+  // one click to flip boards from the confirm step — the settings are otherwise
+  // identical, and Indeed simply ignores what it can't use
+  $("js-swap").addEventListener("click", () => {
+    saveJsSettings({ ...s, scraper: indeed ? "linkedin" : "indeed" });
+    paintBoardTag();
+    openJobSearchConfirm();
+  });
   $("js-go").addEventListener("click", runJobSearch);
 }
 

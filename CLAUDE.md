@@ -168,6 +168,13 @@ the per-board actor id, rates and item mapping; the admin picks the board in
 the ⚙ job-search settings. Jobs from either board land as `kind = 'job'`
 leads, told apart by `source_file` (`LinkedIn search` / `Indeed search`).
 
+The choice changes price, filters and whether companies get written, so it is
+deliberately loud in the UI (`JS_BOARDS`/`JS_MARK` in `app.js`, `.board-*` in
+`app.css`): two brand cards with the per-1,000 price and what each board can't
+do, a mode banner spelling out what the choice switches off, the armed board
+named on the 🔎 button (`#js-board-tag`, painted by `paintBoardTag()`), and a
+brand banner with a one-click board swap on the confirm step.
+
 ## Job search also writes companies (LinkedIn only)
 
 `POST /api/job-search` (`server/jobsearch.js resolveCompanies()`) upserts a

@@ -827,9 +827,118 @@ body.dragging #import-btn { outline: 3px solid var(--accent-soft); }
    controls (.li-only) and reveals its own note (.in-only) */
 #js-form.indeed .li-only { display: none; }
 #js-form:not(.indeed) .in-only { display: none; }
-#js-form .in-only { margin-bottom: 12px; }
+/* the whole form takes the active board's brand colour, so the mode banner and
+   the cost chip shift with the choice, not just the selected card */
+#js-form { --brand: #0a66c2; --brand-soft: #eaf2fb; }
+#js-form.indeed { --brand: #003a9b; --brand-soft: #e9eef9; }
+
+/* the two boards behave differently enough (price, filters, whether companies
+   are created) that the choice gets full brand cards, not a radio pair */
+.board-linkedin { --brand: #0a66c2; --brand-soft: #eaf2fb; }
+.board-indeed { --brand: #003a9b; --brand-soft: #e9eef9; }
+:root[data-theme="dark"] #js-form,
+:root[data-theme="dark"] .board-linkedin { --brand: #4a9be8; --brand-soft: #14263c; }
+:root[data-theme="dark"] #js-form.indeed,
+:root[data-theme="dark"] .board-indeed { --brand: #7ba0ff; --brand-soft: #18213d; }
+
+.board-picker { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+/* these are <label>s inside .modal, so they have to out-specify `.modal label`
+   and `.modal input` — hence the #js-form prefixes */
+.modal .board-card {
+  position: relative; display: block; cursor: pointer; margin-bottom: 0;
+  border: 2px solid var(--border); border-radius: 5px;
+  background: var(--surface-2); padding: 12px 13px 12px;
+  transition: border-color .12s, background .12s, opacity .12s;
+}
+/* the radio still carries the value and the keyboard behaviour */
+.modal .board-card input {
+  position: absolute; width: 1px; height: 1px; padding: 0; border: none;
+  margin: 0; opacity: 0; pointer-events: none;
+}
+.board-card:not(.on) { opacity: .5; }
+.board-card:not(.on):hover { opacity: .85; border-color: var(--ink-3); }
+.board-card:not(.on) .board-mark { filter: grayscale(1); }
+.board-card.on {
+  opacity: 1; border-color: var(--brand); background: var(--brand-soft);
+}
+.board-card:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.board-head { display: flex; align-items: center; gap: 8px; }
+.board-mark { width: 24px; height: 24px; flex: none; display: block; }
+.board-name {
+  font-size: 16px; font-weight: 700; letter-spacing: -.01em; color: var(--ink);
+}
+.board-tick {
+  margin-left: auto; width: 18px; height: 18px; border-radius: 50%;
+  background: var(--brand); color: #fff; font-size: 11px; font-weight: 700;
+  display: grid; place-items: center; opacity: 0;
+}
+:root[data-theme="dark"] .board-tick { color: #10131a; }
+.board-card.on .board-tick { opacity: 1; }
+.board-price {
+  display: block; margin-top: 10px; font-size: 17px; font-weight: 700;
+  color: var(--ink); line-height: 1.1;
+}
+.board-price small {
+  display: block; font-size: 11px; font-weight: 500; color: var(--ink-3);
+  margin-top: 2px;
+}
+.board-tag {
+  display: inline-block; margin-top: 8px; padding: 2px 7px; border-radius: 3px;
+  background: var(--brand); color: #fff;
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+}
+:root[data-theme="dark"] .board-tag { color: #10131a; }
+.board-marks {
+  display: block; margin-top: 9px; font-size: 12px; color: var(--ink-2);
+  line-height: 1.45;
+}
+.board-marks span { display: block; position: relative; padding-left: 13px; margin-top: 4px; }
+.board-marks span::before {
+  content: ""; position: absolute; left: 2px; top: 6px;
+  width: 5px; height: 5px; border-radius: 50%; background: var(--brand);
+}
+/* what the choice actually changes, spelled out under the cards */
+.board-mode {
+  font-size: 12.5px; line-height: 1.55; color: var(--ink-2);
+  background: var(--surface-2); border-left: 3px solid var(--brand);
+  border-radius: 0 4px 4px 0; padding: 8px 11px; margin: 12px 0 14px;
+}
+.board-mode strong { color: var(--ink); }
+
+/* the board name, wherever it has to travel outside a card */
+.board-chip {
+  display: inline-block; padding: 1px 6px; border-radius: 3px; color: #fff;
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+}
+.board-chip-linkedin { background: #0a66c2; }
+.board-chip-indeed { background: #003a9b; }
+/* on the blue primary button the brand fills can't hold their own — invert */
+.js-board-tag { background: #fff; }
+.js-board-tag.board-chip-linkedin { color: #0a66c2; background: #fff; }
+.js-board-tag.board-chip-indeed { color: #003a9b; background: #fff; }
+
+/* the confirm step leads with the board — this is the click that spends money */
+.board-banner {
+  display: flex; align-items: center; gap: 11px; margin-bottom: 14px;
+  border: 2px solid var(--brand); background: var(--brand-soft);
+  border-radius: 5px; padding: 11px 13px;
+}
+.board-banner .board-mark { width: 30px; height: 30px; }
+.board-banner-name { font-size: 17px; font-weight: 700; line-height: 1.1; }
+.board-banner-sub { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
+.board-swap {
+  margin-left: auto; flex: none; font-size: 11.5px; font-weight: 600;
+  color: var(--ink-2); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 4px; padding: 6px 9px;
+}
+.board-swap:hover { color: var(--ink); border-color: var(--ink-3); }
+
 .job-search-row { display: flex; gap: 6px; margin-bottom: 6px; }
-.job-search-row .btn-primary { flex: 1; }
+/* the button stacks its label over the armed board's chip */
+.job-search-row .btn-primary {
+  flex: 1; display: flex; flex-direction: column; align-items: center;
+  gap: 4px; padding: 8px 10px; line-height: 1.15;
+}
 .btn-gear { padding: 7px 10px; font-size: 15px; line-height: 1; }
 .credits-line {
   font-size: 11px; color: var(--ink-3); text-align: center;
