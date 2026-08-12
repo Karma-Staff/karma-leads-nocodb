@@ -135,7 +135,7 @@ router.get("/api/leads/:key", async (req, res, next) => {
     if (coId) {
       if (row.kind !== "company")
         related.company = (await query(
-          "SELECT id, lead_code, name, city, state FROM leads WHERE id = $1",
+          "SELECT id, lead_code, name, city, state, logo_url FROM leads WHERE id = $1",
           [coId])).rows[0] || null;
       related.people = (await query(
         `SELECT id, lead_code, name, title, email, phone FROM leads
