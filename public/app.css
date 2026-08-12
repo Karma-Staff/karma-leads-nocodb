@@ -424,6 +424,13 @@ a:hover { text-decoration: underline; }
 }
 button.fav-star:hover { background: var(--surface-2); color: var(--ink-2); transform: scale(1.15); }
 .fav-star.on { color: #eab308; }
+/* a column of grey stars is noise when almost nothing is favorited — the
+   list's star only appears on hover (and stays for favorites, the selected
+   row, and keyboard focus; touch screens have no hover, so always there) */
+.lead-row .fav-star { opacity: 0; transition: opacity 0.12s; }
+.lead-row:hover .fav-star, .lead-row.selected .fav-star,
+.lead-row .fav-star.on, .lead-row .fav-star:focus-visible { opacity: 1; }
+@media (hover: none) { .lead-row .fav-star { opacity: 1; } }
 
 .avatar {
   width: 34px; height: 34px; border-radius: 50%; flex-shrink: 0;
@@ -565,9 +572,20 @@ body.resizing .lead-row, body.resizing .splitter { pointer-events: none; }
 .detail-headings { flex: 1; min-width: 0; }
 .detail-name { font-size: 21px; font-weight: 700; }
 .detail-co { color: var(--ink-2); margin-top: 2px; }
+.detail-meta {
+  display: flex; align-items: center; gap: 8px;
+  margin-top: 8px; flex-wrap: wrap;
+}
 .detail-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .fav-btn { font-size: 20px; padding: 4px 6px; border-radius: 4px; }
 .fav-btn:hover { background: var(--surface-2); }
+/* the remove/restore control is labeled — a bare 🚫 doesn't say whether it
+   removes, blocks or disqualifies (it removes AND bans the number) */
+.remove-btn {
+  font-size: 12.5px; font-weight: 600; color: var(--ink-2);
+  display: inline-flex; align-items: center; gap: 2px;
+  border: 1px solid var(--border); padding: 5px 9px;
+}
 
 .status-select {
   border: 1px solid var(--border); border-radius: 4px;
@@ -669,7 +687,10 @@ body.resizing .lead-row, body.resizing .splitter { pointer-events: none; }
 }
 .related-row.no-avatar:hover { border-left-color: var(--accent); }
 .related-main { flex: 1; min-width: 0; }
-.related-name { font-weight: 600; font-size: 13.5px; }
+.related-name {
+  font-weight: 600; font-size: 13.5px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .related-sub { color: var(--ink-3); font-size: 12px; }
 .related-more { color: var(--ink-3); font-size: 12.5px; padding: 6px 10px; }
 
