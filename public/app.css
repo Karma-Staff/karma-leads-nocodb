@@ -1039,27 +1039,18 @@ body.dragging #import-btn { outline: 3px solid var(--accent-soft); }
 /* ---- the settings panel itself
    Three boards, and three boards' worth of filters, stopped fitting a 420px
    dialog: the form became a column you scroll past rather than a set of
-   choices you compare. So this one modal is a working surface — wide enough
-   for the cards to sit side by side and for the filters to run two-up, with
-   the full-width rows (picker, the paired fields, advanced, the price line)
-   spanning both columns so the reading order still goes straight down. */
+   choices you compare. So this one modal is a working surface.
+
+   The width goes to the fields, not to a second column: the board's search
+   itself — LinkedIn's title list, Indeed's boolean lines, Google's query — is
+   the thing being written, and half a row is not enough box to write a
+   boolean search in. Each gets its own full-width line, everything else sits
+   below it, and the room shows up instead in the three-up board cards, the
+   paired small fields and the three-up checkbox groups. */
 .modal.js-panel {
   width: min(880px, calc(100vw - 48px));
   max-height: 90vh;
 }
-.modal.js-panel #js-form {
-  display: grid; grid-template-columns: 1fr 1fr;
-  gap: 0 20px; align-items: start;
-}
-.modal.js-panel #js-form > .js-group-label,
-.modal.js-panel #js-form > .board-picker,
-.modal.js-panel #js-form > .js-two,
-.modal.js-panel #js-form > .js-adv,
-.modal.js-panel #js-form > .js-estimate,
-.modal.js-panel #js-form > .modal-actions { grid-column: 1 / -1; }
-/* the paired fields and the checkbox groups get the room too — at this width
-   a two-column check grid was leaving half the panel empty */
-.modal.js-panel .js-two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .modal.js-panel .check-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .modal.js-panel .board-picker { gap: 12px; }
 
@@ -1298,6 +1289,6 @@ label.check input[type="checkbox"] { width: auto; margin: 0; accent-color: var(-
    read — well above the phone breakpoint above */
 @media (max-width: 780px) {
   .modal.js-panel { width: auto; max-width: calc(100vw - 24px); }
-  .modal.js-panel #js-form { grid-template-columns: 1fr; }
+  .modal.js-panel .js-two { grid-template-columns: 1fr; }
   .modal.js-panel .check-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
