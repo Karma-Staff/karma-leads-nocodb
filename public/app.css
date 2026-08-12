@@ -841,7 +841,9 @@ body.dragging #import-btn { outline: 3px solid var(--accent-soft); }
 :root[data-theme="dark"] #js-form.indeed,
 :root[data-theme="dark"] .board-indeed { --brand: #7ba0ff; --brand-soft: #18213d; }
 
-.board-picker { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.board-picker {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px;
+}
 /* these are <label>s inside .modal, so they have to out-specify `.modal label`
    and `.modal input` — hence the #js-form prefixes */
 .modal .board-card {
@@ -888,23 +890,6 @@ body.dragging #import-btn { outline: 3px solid var(--accent-soft); }
   font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
 }
 :root[data-theme="dark"] .board-tag { color: #10131a; }
-.board-marks {
-  display: block; margin-top: 9px; font-size: 12px; color: var(--ink-2);
-  line-height: 1.45;
-}
-.board-marks span { display: block; position: relative; padding-left: 13px; margin-top: 4px; }
-.board-marks span::before {
-  content: ""; position: absolute; left: 2px; top: 6px;
-  width: 5px; height: 5px; border-radius: 50%; background: var(--brand);
-}
-/* what the choice actually changes, spelled out under the cards */
-.board-mode {
-  font-size: 12.5px; line-height: 1.55; color: var(--ink-2);
-  background: var(--surface-2); border-left: 3px solid var(--brand);
-  border-radius: 0 4px 4px 0; padding: 8px 11px; margin: 12px 0 14px;
-}
-.board-mode strong { color: var(--ink); }
-
 /* the board name, wherever it has to travel outside a card */
 .board-chip {
   display: inline-block; padding: 1px 6px; border-radius: 3px; color: #fff;

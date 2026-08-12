@@ -1247,14 +1247,8 @@ const JS_MARK = {
   </svg>`,
 };
 const JS_BOARDS = [
-  { key: "linkedin", label: "LinkedIn", tag: "Richest data",
-    marks: ["Every advanced filter below applies",
-      "Also creates company records — logo, website, HQ, headcount",
-      "Many job titles and locations in one run"] },
-  { key: "indeed", label: "Indeed", tag: "Cheapest per job",
-    marks: ["One job title and one location per run",
-      "No advanced filters — titles and location only",
-      "Jobs only — no company records, logos or websites"] },
+  { key: "linkedin", label: "LinkedIn", tag: "Richest data" },
+  { key: "indeed", label: "Indeed", tag: "Cheapest per job" },
 ];
 const JS_SCRAPERS = JS_BOARDS.map((b) => [b.key, b.label]);
 const JS_RATES_FALLBACK = {
@@ -1401,7 +1395,7 @@ function openJobSearchSettings() {
   $("modal-body").innerHTML = `
     ${usageCard()}
     <form id="js-form"${s.scraper === "indeed" ? ' class="indeed"' : ""}>
-      <div class="js-group-label">Job board — this changes what a search can do</div>
+      <div class="js-group-label">Job Board Settings</div>
       <div class="board-picker">${JS_BOARDS.map((b) => `
         <label class="board-card board-${b.key}${b.key === s.scraper ? " on" : ""}">
           <input type="radio" name="js-scraper" value="${b.key}"
@@ -1414,16 +1408,7 @@ function openJobSearchSettings() {
           <span class="board-price">${usd(jsRates(b.key).perResultUsd * 1000)}
             <small>per 1,000 jobs</small></span>
           <span class="board-tag">${b.tag}</span>
-          <span class="board-marks">${b.marks.map((m) =>
-            `<span>${esc(m)}</span>`).join("")}</span>
         </label>`).join("")}</div>
-      <div class="board-mode">
-        <span class="li-only"><strong>LinkedIn mode</strong> — every field below
-          is live, and each organization found also lands as a company lead.</span>
-        <span class="in-only"><strong>Indeed mode</strong> — only the
-          <strong>first</strong> job title and the <strong>first</strong> location
-          are sent. Posted-within and the advanced filters are switched off.</span>
-      </div>
       <label>Job titles — comma-separated, blank = any
         <input id="js-titles" value="${esc(s.titles)}"
                placeholder="Insurance Adjuster, Claims Adjuster">
