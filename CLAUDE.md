@@ -156,10 +156,21 @@ any other endpoint; revoke/rotate via `cli.js`). The pipeline reads
 `KARMA_API_URL`/`KARMA_API_TOKEN` from the environment, never source files,
 and NEVER connects to Postgres directly.
 
-## Job search also writes companies
+## Job search: two boards, one endpoint
+
+`POST /api/job-search` takes a `scraper` key — `linkedin` (the fantastic-jobs
+actor, default, full filter set) or `indeed` (`misceres~indeed-scraper`: one
+title + one location per run, no filters, lower per-result price). The
+registry in `server/jobsearch.js` (`SCRAPERS`/`RATES`/`normalizeItem()`) owns
+the per-board actor id, rates and item mapping; the admin picks the board in
+the ⚙ job-search settings. Jobs from either board land as `kind = 'job'`
+leads, told apart by `source_file` (`LinkedIn search` / `Indeed search`).
+
+## Job search also writes companies (LinkedIn only)
 
 `POST /api/job-search` (`server/jobsearch.js resolveCompanies()`) upserts a
-`company` lead for every organization in the scrape — logo (`leads.logo_url`),
+`company` lead for every organization in a **LinkedIn** scrape — logo
+(`leads.logo_url`),
 website, industry, headcount, and the org's LinkedIn **HQ** city/state (never
 the posting's location) — and links each new job via `company_lead_id`.
 Matching keeps the franchise guards: name+city keys (`lead_keys`) against the
@@ -167,7 +178,10 @@ whole base; bare organization name only among `source = 'Job board'` companies
 (within one job board the org name is one LinkedIn entity). On a match only
 blank fields are backfilled — a scrape never overwrites curated data. The
 front end overlays `logo_url` on the initials avatar and falls back to
-initials if the URL goes stale.
+initials if the URL goes stale. Indeed scrapes skip the company upsert on
+purpose: their items carry only a display name (no HQ/logo/website), and the
+bare-name rule above assumes one LinkedIn entity per name — a second board
+feeding it could merge franchises.
 
 ## Dedupe: franchises are not duplicates
 

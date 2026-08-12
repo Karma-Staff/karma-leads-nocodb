@@ -799,7 +799,12 @@ body.dragging #import-btn { outline: 3px solid var(--accent-soft); }
 .ir-row:last-child { border-bottom: none; }
 .ir-row strong { color: var(--ink); }
 
-/* ---------- LinkedIn job search ---------- */
+/* ---------- job search (LinkedIn / Indeed) ---------- */
+/* the board picker doubles as a mode switch: Indeed hides the LinkedIn-only
+   controls (.li-only) and reveals its own note (.in-only) */
+#js-form.indeed .li-only { display: none; }
+#js-form:not(.indeed) .in-only { display: none; }
+#js-form .in-only { margin-bottom: 12px; }
 .job-search-row { display: flex; gap: 6px; margin-bottom: 6px; }
 .job-search-row .btn-primary { flex: 1; }
 .btn-gear { padding: 7px 10px; font-size: 15px; line-height: 1; }
