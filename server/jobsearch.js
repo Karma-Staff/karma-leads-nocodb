@@ -26,6 +26,7 @@ const { requireAdmin } = require("./auth");
 const activity = require("./activity");
 const counts = require("./counts");
 const { mintCode, isoDate, aliases, clean, cleanPlace } = require("./dedupe");
+const { fillPhone } = require("./enrich");
 
 const router = express.Router();
 // path-scoped: routers share "/"
@@ -488,7 +489,7 @@ async function resolveCompanies(items, stamp) {
     if (!orgs.has(k) || (!orgs.get(k).it.organization_logo && it.organization_logo))
       orgs.set(k, { name, it });
   }
-  const out = { ids: new Map(), inserted: 0, updated: 0 };
+  const out = { ids: new Map(), inserted: 0, updated: 0, phonesFilled: 0 };
   if (!orgs.size) return out;
 
   /* two indexed reads sized to the scrape, never a scan of the base */
@@ -550,6 +551,14 @@ async function resolveCompanies(items, stamp) {
        facts.city, facts.state, facts.logo_url, stamp])).rows[0];
     out.ids.set(k, row.id);
     out.inserted++;
+    /* the boards never send a phone, but Bitrix/Master usually already know
+       this company — borrow the number when the match is unambiguous
+       (server/enrich.js). Best-effort: a miss just leaves the blank. */
+    try {
+      if (await fillPhone(query, { id: row.id, name: o.name,
+        website: facts.website, city: facts.city, state: facts.state }))
+        out.phonesFilled++;
+    } catch (e) { console.warn("phone backfill failed:", e.message); }
     // claim the name+city keys so the next import meets this company
     if (facts.city)
       for (const a of aliases(o.name).set)
@@ -644,7 +653,7 @@ router.post("/api/job-search", express.json({ limit: "64kb" }), async (req, res,
        we have never stored, so this runs over everything the search found */
     const companies = key === "linkedin"
       ? await resolveCompanies(found, stamp)
-      : { ids: new Map(), inserted: 0, updated: 0 };
+      : { ids: new Map(), inserted: 0, updated: 0, phonesFilled: 0 };
 
     /* LinkedIn's ats_duplicate flag marks overlap with the vendor's OTHER
        dataset, not duplication inside these results — don't drop on it */
@@ -696,7 +705,7 @@ router.post("/api/job-search", express.json({ limit: "64kb" }), async (req, res,
     activity.log({ actor: req.user.email, user_id: req.user.id, action: "jobsearch",
       meta: { scraper: key, found: found.length, inserted, duplicates,
         queries: inputs.length, companies: companies.inserted,
-        costUsd: cost?.usd ?? null } });
+        phonesFilled: companies.phonesFilled, costUsd: cost?.usd ?? null } });
 
     res.json({
       scraper: key,
@@ -709,7 +718,8 @@ router.post("/api/job-search", express.json({ limit: "64kb" }), async (req, res,
           : { limit, timeRange: inputs[0].timeRange },
       queriesFailed: failed.length,
       found: found.length, inserted, duplicates,
-      companies: { inserted: companies.inserted, updated: companies.updated },
+      companies: { inserted: companies.inserted, updated: companies.updated,
+        phonesFilled: companies.phonesFilled },
       cost,
     });
   } catch (e) { next(e); }

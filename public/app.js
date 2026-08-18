@@ -8,6 +8,7 @@ const S = {
   q: "",
   status: "",
   state: "",           // two-letter code, "" = everywhere
+  board: "",           // job board source: linkedin | indeed | google, "" = all
   focus: "",           // armed KPI tile: ready | enrich | unassigned | week
   sort: "recent",
   list: [],
@@ -402,6 +403,9 @@ function listParams() {
   }
   if (S.q) p.set("q", S.q);
   if (S.status) p.set("status", S.status);
+  // the board filter only means anything on the job board (its control is
+  // hidden everywhere else), so the param only rides along there
+  if (S.board && cfg.kind === "job") p.set("board", S.board);
   if (S.focus) p.set("focus", S.focus);          // an armed KPI tile
   p.set("sort", sortUsable(S.sort, S.tab) ? S.sort : "recent");
   p.set("limit", S.pageSize);
@@ -420,6 +424,7 @@ function openSegment(category, state, label) {
   $("seg-eyebrow")?.classList.remove("hidden");
   $("list-head")?.classList.add("in-segment");
   $("clear-recents")?.classList.add("hidden");
+  $("board-ctl")?.classList.add("hidden");   // segments list companies
   renderSortOptions();
   $("lead-list").scrollTop = 0;
   loadList(true);
@@ -495,6 +500,7 @@ function renderPager() {
   // highlight the controls that are actually narrowing the list
   $("filter-state")?.closest(".ctl")?.classList.toggle("on", !!S.state);
   $("filter-status")?.closest(".ctl")?.classList.toggle("on", !!S.status);
+  $("filter-board")?.closest(".ctl")?.classList.toggle("on", !!S.board);
   $("sort-by")?.closest(".ctl")?.classList.toggle("on",
     S.sort !== "recent" && !TABS[S.tab].activity && !TABS[S.tab].segment);
   const pages = pageCount();
@@ -642,7 +648,7 @@ function renderList() {
               aria-label="Select ${esc(name)}">` : ""}
       ${avatarHtml(name, r.Logo)}
       <div class="lead-row-main">
-        <div class="lead-name" title="${esc(full)}"><span class="status-dot ${statusDotCls(r.Status)}" title="${esc(r.Status || "New")}"></span>${esc(name)}${co}</div>
+        <div class="lead-name" title="${esc(full)}">${esc(name)}${co}</div>
         ${rowSubtitle(r) ? `<div class="lead-sub">${esc(rowSubtitle(r))}</div>` : ""}
         ${factsHtml(r)}
         <div class="lead-meta">${sourceChip(r.Source || (r._t === "jobs" ? "Job board" : ""))}${statusChip(r.Status)}</div>
@@ -984,10 +990,6 @@ async function copyText(value, el) {
     setTimeout(() => el.classList.remove("copied"), 1200);
   }
   toast(ok ? `Copied ${value}` : "Could not copy — select it manually");
-}
-
-function statusDotCls(st) {
-  return "sd-" + (st || "New").toLowerCase().replace(/\s+/g, "");
 }
 
 /* toggle favorite from anywhere; keeps list, detail and counts in sync */
@@ -2085,6 +2087,7 @@ function renderJobSearchResult(o) {
       ${line("Skipped — already in the base", o.duplicates)}
       ${line("New companies added", o.companies?.inserted)}
       ${line("Companies enriched (logo, website…)", o.companies?.updated)}
+      ${line("Phone numbers matched from our data", o.companies?.phonesFilled)}
       ${o.queriesFailed
         ? `<div class="ir-row"><span>Searches that failed</span>
              <strong class="js-price-warn">${o.queriesFailed}</strong></div>` : ""}
@@ -2679,7 +2682,11 @@ function feedLine(f) {
       (m.inserted ? ` <span class="feed-what">(${JSON.stringify(m.inserted).replace(/[{}"]/g, "")})</span>` : "");
     case "jobsearch": return `ran a${{ indeed: "n Indeed", google: " Google Jobs" }[m.scraper]
       || " LinkedIn"} job search <span class="feed-what">(${m.found ?? "?"} found, ${m.inserted ?? "?"} new${
-      m.companies ? `, ${m.companies} compan${m.companies === 1 ? "y" : "ies"}` : ""})</span>`;
+      m.companies ? `, ${m.companies} compan${m.companies === 1 ? "y" : "ies"}` : ""}${
+      m.phonesFilled ? `, ${m.phonesFilled} phone${m.phonesFilled === 1 ? "" : "s"} matched` : ""})</span>`;
+    case "enrich": return `matched phone numbers for <b>${m.filled ?? "?"}</b> of ${
+      m.scanned ?? "?"} phone-less job companies <span class="feed-what">(${
+      m.domain ?? 0} by website, ${m.namecity ?? 0} by name+city)</span>`;
     default: return esc(f.action);
   }
 }
@@ -2768,6 +2775,9 @@ function setTab(tab) {
   document.querySelectorAll(".nav-item").forEach((b) =>
     b.classList.toggle("active", b.dataset.tab === tab));
   $("clear-recents")?.classList.toggle("hidden", !TABS[tab].activity);
+  // the board filter is a job-board thing; S.board is kept, so flipping to
+  // People and back does not lose the pick
+  $("board-ctl")?.classList.toggle("hidden", tab !== "jobs");
   /* Team activity is not a list of leads: it takes the whole width instead of
      leaving an empty reading pane beside a chart */
   const isStats = !!TABS[tab].stats;
@@ -2860,60 +2870,67 @@ function wireSplitter() {
    clicks anything or touches S. */
 const TOUR_STEPS = [
   { title: "Welcome to Karma Leads",
-    body: "The team's shared lead dashboard: every company, contact and job " +
-      "posting in one deduped place, so nobody works the same number twice. " +
-      "Here's a quick look around — it takes under a minute." },
+    body: "This is the team lead dashboard. Every company, contact and job " +
+      "posting lives here in one place, already deduped. This tour points " +
+      "out where everything is." },
   { sel: ".searchbox", pos: "below", title: "Search",
-    body: "Type here to search the view you're in — company names, contacts, " +
-      "cities. It stacks with the filters below, so you can search inside " +
-      "any slice of the data." },
-  { sel: "#stats", pos: "below", title: "Work queues, not vanity numbers",
-    body: "Each tile is a button. Click “Ready to work” and the list filters " +
-      "to exactly the leads it counted — has a phone, never contacted. Click " +
-      "the armed tile again to clear it." },
+    body: "Searches the view you are in by name, contact or city. It works " +
+      "together with the filters below." },
+  { sel: "#stats", pos: "below", title: "The four tiles",
+    body: "Each tile is a button. Click one and the list filters down to " +
+      "those leads. Click it again to clear." },
   { sel: '.nav-item[data-tab="companies"], .nav-item[data-tab="people"], ' +
       '.nav-item[data-tab="jobs"], .nav-item[data-tab="recent"], ' +
       '.nav-item[data-tab="favorites"]', pos: "right", title: "Views",
-    body: "Companies, People and the Job board are the three kinds of leads. " +
-      "Recent is your own trail — the last leads you touched — and Favorites " +
-      "holds the ones you star." },
+    body: "Companies, People and Job board are the three kinds of leads. " +
+      "Recent is the last leads you touched. Favorites is where your " +
+      "starred leads go." },
   { sel: '.nav-item[data-tab="stats"], .nav-item[data-tab="removed"]',
     pos: "right", title: "Manage (admin)",
-    body: "Team activity is the whole team's action log. DNC is the " +
-      "do-not-call ban list — removing a lead bans its phone number and " +
-      "sweeps every lead that shares it." },
-  { sel: ".list-controls", pos: "below", title: "Sort & filter",
-    body: "Order the list, or narrow it by state or status. Filters stack " +
-      "with the search box and the tiles above." },
+    body: "Team activity is the log of what everyone did. DNC is the list " +
+      "of banned phone numbers." },
+  { sel: ".list-controls", pos: "below", title: "Sort and filter",
+    body: "Sorts the list, or narrows it down by state or status. These " +
+      "stack with the search box and the tiles." },
   { sel: "#bulk-tools", pos: "below", title: "Bulk actions (admin)",
-    body: "Turn on Select and every row grows a checkbox. Assign, DNC or " +
-      "delete the whole selection at once — and it survives paging, so you " +
-      "can tick across pages." },
+    body: "Turn on Select and every row gets a checkbox. You can assign, " +
+      "DNC or delete the whole selection at once." },
   { sel: "#lead-list", pos: "right", title: "The lead list",
-    body: "Every lead in the current view. Click a row to read it on the " +
-      "right; the ▤ ▥ ▦ toggle in the header changes the row height." },
-  { sel: "#detail-pane", pos: "left", title: "The reading pane",
-    body: "The whole lead: contact details, status, owner, notes. Star it to " +
-      "favorite, set a status, assign an owner — or Remove it to ban the " +
-      "number (there's a 5-second undo). Drag the divider to resize." },
+    body: "Every lead in the current view. Click a row to open it. The " +
+      "tour opens the first one for you now." },
+  // the steps below read the open lead: `open` makes the tour click the
+  // first row if nothing is selected yet, then wait for the panel to render
+  { sel: ".detail-lookup", pos: "left", open: true,
+    title: "Google and LinkedIn",
+    body: "One click searches Google or LinkedIn for this lead. No typing " +
+      "the name out yourself." },
+  { sel: "#d-status", pos: "left", open: true, title: "Status",
+    body: "Move the lead from New to Contacted, Responded, Qualified or " +
+      "Not interested. The list and the tiles update right away." },
+  { sel: "#d-owner", pos: "left", open: true, title: "Owner",
+    body: "Type a name here to assign the lead. Assigned leads leave the " +
+      "Unassigned tile." },
+  { sel: "#comments, .note-box", pos: "left", open: true, title: "Notes",
+    body: "Notes save on the lead and the whole team can read them. Write " +
+      "one and press enter." },
+  { sel: "#d-fav", pos: "left", open: true, title: "Favorite",
+    body: "The star saves this lead to your Favorites view." },
+  { sel: ".detail-danger", pos: "left", open: true, title: "DNC and delete",
+    body: "DNC bans the phone number so nobody on the team calls it again. " +
+      "Delete moves the lead to the trash bin, where it sits for 30 days." },
   { sel: ".pager", pos: "above", title: "Paging",
-    body: "Move through big lists here, and choose how many rows you see " +
-      "per page." },
+    body: "Flip through pages here and pick how many rows show at once." },
   { sel: "#job-search-btn, #import-btn", pos: "right",
     title: "Bringing leads in (admin)",
-    body: "Find jobs runs the job-board scraper — the ⚙ picks the board and " +
-      "the search. Import leads takes spreadsheet exports; imports never " +
-      "overwrite a filled field with a blank." },
+    body: "Find jobs runs the job board scraper. Import leads takes " +
+      "spreadsheet files. An import never overwrites a filled field with " +
+      "a blank." },
   { sel: "#theme-toggle", pos: "below", title: "Light or dark",
-    body: "Switch the theme any time — your choice is remembered on this " +
-      "browser." },
+    body: "Switches the theme. It stays how you leave it." },
   { sel: "#user-avatar", pos: "below", title: "Your account",
-    body: "Sign out here. Admins also find Manage team and the Trash — " +
-      "deleted leads wait there 30 days before purging, so a mistake is " +
-      "recoverable." },
-  { title: "That's the tour",
-    body: "You're all set. Replay this any time with the ? button in the " +
-      "top bar." },
+    body: "Sign out here. Admins also get Manage team and the Trash." },
+  { title: "That is the tour",
+    body: "That is everything. Press the ? button up top to watch it again." },
 ];
 
 let tour = null;   // {steps, i, root, spot, card} while one is running
@@ -2964,12 +2981,9 @@ function placeTourCard(box, pos) {
   card.style.top = Math.max(10, Math.min(top, vh - ch - 10)) + "px";
 }
 
-function tourGo(i) {
-  if (!tour) return;
-  tour.i = Math.max(0, Math.min(i, tour.steps.length - 1));
+function tourShow() {
   const step = tour.steps[tour.i];
   const last = tour.i === tour.steps.length - 1;
-  (tourTargets(step) || [])[0]?.scrollIntoView({ block: "nearest" });
   const box = tourBox(step);
   const { spot, root } = tour;
   const pad = 6;
@@ -2998,12 +3012,36 @@ function tourGo(i) {
   placeTourCard(box, step.pos);          // content is set, so the size is real
 }
 
+async function tourGo(i) {
+  if (!tour) return;
+  const dir = i >= tour.i ? 1 : -1;      // skip past dead steps the same way
+  i = Math.max(0, Math.min(i, tour.steps.length - 1));
+  const step = tour.steps[i];
+  const gen = ++tour.gen;                // stale async guard: last call wins
+  if (step.open && !tourTargets(step)) {
+    // this step reads the lead panel: open the first lead, real click, then
+    // wait out select()'s fetch. Nothing to open means nothing to show.
+    document.querySelector("#lead-list .lead-row")?.click();
+    for (let t = 0; t < 25 && !tourTargets(step); t++)
+      await new Promise((res) => setTimeout(res, 100));
+    if (!tour || tour.gen !== gen) return;
+  }
+  if (step.sel && !tourTargets(step) && i > 0 && i < tour.steps.length - 1)
+    return tourGo(i + dir);              // first and last are always sel-less
+  tour.i = i;
+  (tourTargets(step) || [])[0]?.scrollIntoView({ block: "nearest" });
+  tourShow();
+  if (step.open) setTimeout(() => {      // notes land async; re-ring once
+    if (tour && tour.gen === gen) tourShow();
+  }, 800);
+}
+
 function tourNext() {
   if (tour.i >= tour.steps.length - 1) endTour();
   else tourGo(tour.i + 1);
 }
 
-function tourReflow() { if (tour) tourGo(tour.i); }
+function tourReflow() { if (tour) tourShow(); }
 
 function tourKeys(e) {
   if (!tour) return;
@@ -3027,7 +3065,8 @@ function endTour() {
 
 function startTour() {
   if (tour) return;
-  const steps = TOUR_STEPS.filter((s) => !s.sel || tourTargets(s));
+  // open steps stay in: their targets only exist once a lead is clicked
+  const steps = TOUR_STEPS.filter((s) => !s.sel || s.open || tourTargets(s));
   const root = document.createElement("div");
   root.className = "tour";
   root.innerHTML = `
@@ -3046,7 +3085,7 @@ function startTour() {
       </div>
     </div>`;
   document.body.appendChild(root);
-  tour = { steps, i: 0, root,
+  tour = { steps, i: 0, gen: 0, root,
     spot: root.querySelector(".tour-spot"),
     card: root.querySelector(".tour-card") };
   root.querySelector(".tour-skip").addEventListener("click", endTour);
@@ -3085,6 +3124,7 @@ function wire() {
   });
   on("filter-status", "change", (e) => { S.status = e.target.value; loadList(true); });
   on("filter-state", "change", (e) => { S.state = e.target.value; loadList(true); });
+  on("filter-board", "change", (e) => { S.board = e.target.value; loadList(true); });
   on("sort-by", "change", (e) => {
     S.sort = e.target.value;
     localStorage.setItem("kl_sort", S.sort);

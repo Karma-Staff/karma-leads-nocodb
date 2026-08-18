@@ -64,6 +64,12 @@ const FOCUS = {
   week:       "date_added >= current_date - 6",
 };
 
+/* the Job board's source filter (?board=): scraper rows carry source_file
+   "LinkedIn search" / "Indeed search" / "Google Jobs search" (jobsearch.js
+   SCRAPERS), and older spreadsheet imports carry the workbook's filename,
+   which names the board too — so match by pattern, not exact value */
+const BOARDS = { linkedin: "%linkedin%", indeed: "%indeed%", google: "%google%" };
+
 const enc = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
 const dec = (s) => { try { return JSON.parse(Buffer.from(s, "base64url").toString()); } catch { return null; } };
 
@@ -85,6 +91,7 @@ function buildFilters(p) {
     const ab = p.state.toUpperCase();
     add("(upper(state) = ? OR state ILIKE ?)", ab, STATE_NAME[ab]);
   }
+  if (BOARDS[p.board]) add("source_file ILIKE ?", BOARDS[p.board]);
   if (p.category) add("category = ?", p.category);   // with state = a segment
   if (p.q) {
     const q = `%${String(p.q).slice(0, 100)}%`;

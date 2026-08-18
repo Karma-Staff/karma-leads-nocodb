@@ -7,7 +7,7 @@
 <!-- geometric K, drawn rather than typeset, so it matches the mark in the app -->
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%232f54eb'/><path d='M11 7.5v17M11 16l9.5-8.5M11 16l9.5 8.5' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round' fill='none'/></svg>">
 <!-- bump ?v= whenever app.js/app.css change so no one gets a half-old app -->
-<link rel="stylesheet" href="app.css?v=35">
+<link rel="stylesheet" href="app.css?v=36">
 </head>
 <body>
 
@@ -196,6 +196,15 @@
             <option>Qualified</option><option>Not interested</option>
           </select>
         </label>
+        <!-- Job board only: which board the posting was scraped from -->
+        <label class="ctl hidden" id="board-ctl"><span class="ctl-ic">🌐</span>
+          <select id="filter-board" title="Filter by job board">
+            <option value="">All boards</option>
+            <option value="linkedin">LinkedIn</option>
+            <option value="indeed">Indeed</option>
+            <option value="google">Google Jobs</option>
+          </select>
+        </label>
         <!-- Bulk actions (admin), in the filter row. Select is a mode: off,
              the list is exactly what it always was; on, every row grows a
              checkbox and the three actions appear beside the toggle. The
@@ -290,6 +299,6 @@
   </div>
 </div>
 
-<script src="app.js?v=33"></script>
+<script src="app.js?v=37"></script>
 </body>
 </html>

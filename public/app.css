@@ -597,30 +597,20 @@ button.fav-star:hover { background: var(--surface-2); color: var(--ink-2); trans
 .density-toggle button:hover { color: var(--ink); }
 .density-toggle button.on { background: var(--surface); color: var(--accent-ink); box-shadow: var(--shadow); }
 
-.status-dot {
-  display: none; width: 7px; height: 7px; border-radius: 50%;
-  margin-right: 7px; flex-shrink: 0; vertical-align: middle;
-}
-.sd-new { background: #4b82d4; } .sd-contacted { background: #d9a441; }
-.sd-responded { background: #2f9e8f; } .sd-qualified { background: #4a9a52; }
-.sd-notinterested { background: #9a9993; }
-
-/* compact: one tight line + facts, no avatar, status as a dot */
+/* compact: one tight line + facts, no avatar */
 body.d-compact .lead-row { padding: 4px 12px; gap: 8px; align-items: center; }
 body.d-compact .lead-row > .avatar { display: none; }
 body.d-compact .lead-sub, body.d-compact .lead-meta { display: none; }
-body.d-compact .status-dot { display: inline-block; }
 body.d-compact .lead-name { font-size: 13px; }
 body.d-compact .lead-facts { margin-top: 1px; font-size: 11.5px; }
 body.d-compact .lead-side { flex-direction: row; align-items: center; gap: 8px; }
 body.d-compact .lead-date { font-size: 11px; }
 body.d-compact .lead-reach { font-size: 12px; }
 
-/* cozy (default): avatar + facts, status as a dot instead of a chip row */
+/* cozy: avatar + facts, no chip row */
 body.d-cozy .lead-row { padding: 7px 14px; }
 body.d-cozy .lead-row > .avatar { width: 28px; height: 28px; font-size: 11px; }
 body.d-cozy .lead-meta { display: none; }
-body.d-cozy .status-dot { display: inline-block; }
 
 /* comfortable: everything, including the source + status chips */
 body.d-comfortable .lead-row { padding: 11px 16px; }
