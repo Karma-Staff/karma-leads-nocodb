@@ -2577,6 +2577,55 @@ async function openBulkDeleteModal() {
 const ACT_SLOTS = 8;                     // --cat-1..8, validated in both themes
 let actFull = false;                     // false = status changes, true = Logs
 
+/* the Team activity pane's ☎ button: both phone-backfill layers over every
+   phone-less job company in one click (POST /api/phone-refresh). The web pass
+   is capped per click server-side so the request stays bounded — for a big
+   backlog the result modal offers to keep going. */
+async function runPhoneRefresh() {
+  const btn = $("act-phones");
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  const was = btn.textContent;
+  btn.textContent = "Filling…";
+  try {
+    const o = await api("/api/phone-refresh", { method: "POST" });
+    const line = (label, n) => n
+      ? `<div class="ir-row"><span>${label}</span><strong>${(+n).toLocaleString()}</strong></div>` : "";
+    $("modal-title").textContent = "Phone refresh";
+    $("modal-body").innerHTML = `
+      <div class="import-done">
+        <div class="dz-art">${o.filled ? "📞" : "🤷"}</div>
+        <p><strong>${o.filled.toLocaleString()} number${o.filled === 1 ? "" : "s"} filled</strong></p>
+        <p class="dz-sub">${o.scanned.toLocaleString()} job compan${
+          o.scanned === 1 ? "y" : "ies"} had none</p>
+      </div>
+      <div class="import-report">
+        ${line("Matched from our own data", o.matched.domain + o.matched.namecity)}
+        ${line("Read off their websites", o.web)}
+        ${line("Sites that listed no number", o.miss.nophone + o.miss.ambiguous)}
+        ${line("Sites dead or behind bot protection", o.miss.unreachable + o.miss.blocked)}
+        ${line("Numbers on the DNC list, skipped", o.banned)}
+        ${line("No website to read", o.noSite)}
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn-secondary" id="modal-cancel">Close</button>
+        ${o.webRemaining ? `<button type="button" class="btn-primary" id="pr-again">
+          Keep going — ${o.webRemaining.toLocaleString()} site${
+            o.webRemaining === 1 ? "" : "s"} left</button>` : ""}
+      </div>`;
+    $("modal-backdrop").classList.remove("hidden");
+    $("modal-cancel").addEventListener("click", closeModal);
+    $("pr-again")?.addEventListener("click", () => { closeModal(); runPhoneRefresh(); });
+    refreshCounts();               // filled phones move the tiles
+    loadStats();                   // …and the run just logged itself
+  } catch (e) {
+    toast(`Phone refresh failed — ${e.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = was;
+  }
+}
+
 async function loadStats() {
   const el = $("stats-body");
   if (!el) return;
@@ -2684,9 +2733,16 @@ function feedLine(f) {
       || " LinkedIn"} job search <span class="feed-what">(${m.found ?? "?"} found, ${m.inserted ?? "?"} new${
       m.companies ? `, ${m.companies} compan${m.companies === 1 ? "y" : "ies"}` : ""}${
       m.phonesFilled ? `, ${m.phonesFilled} phone${m.phonesFilled === 1 ? "" : "s"} matched` : ""})</span>`;
-    case "enrich": return `matched phone numbers for <b>${m.filled ?? "?"}</b> of ${
-      m.scanned ?? "?"} phone-less job companies <span class="feed-what">(${
-      m.domain ?? 0} by website, ${m.namecity ?? 0} by name+city)</span>`;
+    case "enrich": {
+      const how = [
+        m.domain ? `${m.domain} by website match` : "",
+        m.namecity ? `${m.namecity} by name+city` : "",
+        m.web ? `${m.web} read off their websites` : "",
+      ].filter(Boolean).join(", ");
+      return `matched phone numbers for <b>${m.filled ?? "?"}</b> of ${
+        m.scanned ?? "?"} phone-less job companies` +
+        (how ? ` <span class="feed-what">(${how})</span>` : "");
+    }
     default: return esc(f.action);
   }
 }
@@ -3186,6 +3242,7 @@ function wire() {
   on("segment-back", "click", exitSegment);
   on("act-days", "change", loadStats);
   on("act-refresh", "click", loadStats);
+  on("act-phones", "click", runPhoneRefresh);
   on("act-logs", "click", () => { actFull = !actFull; loadStats(); });
   on("import-btn", "click", openImportModal);
   on("job-search-btn", "click", openJobSearchConfirm);
