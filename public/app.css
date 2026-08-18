@@ -1292,3 +1292,53 @@ label.check input[type="checkbox"] { width: auto; margin: 0; accent-color: var(-
   .modal.js-panel .js-two { grid-template-columns: 1fr; }
   .modal.js-panel .check-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* ---------- guided tour ---------- */
+/* the ? in the top bar — a circle so it reads as help, not another mode toggle */
+.btn-help {
+  width: 34px; padding: 7px 0; text-align: center;
+  border-radius: 50%; font-weight: 700; color: var(--ink-2);
+}
+.btn-help:hover { color: var(--accent-ink); border-color: var(--accent); }
+
+/* One element does the dimming AND the highlight: the spotlight div sits over
+   the target and throws a 9999px shadow over everything else. Moving one box
+   is what makes the tour glide — a separate overlay would just cut. */
+.tour { position: fixed; inset: 0; z-index: 80; --tour-dim: rgba(15, 15, 12, .55); }
+:root[data-theme="dark"] .tour { --tour-dim: rgba(0, 0, 0, .68); }
+.tour-spot {
+  position: fixed; pointer-events: none; border-radius: 8px;
+  box-shadow: 0 0 0 9999px var(--tour-dim), 0 0 0 2px var(--accent),
+              0 0 18px 4px rgba(47, 84, 235, .35);
+  transition: left .35s cubic-bezier(.4,0,.2,1), top .35s cubic-bezier(.4,0,.2,1),
+              width .35s cubic-bezier(.4,0,.2,1), height .35s cubic-bezier(.4,0,.2,1);
+}
+/* welcome/finish steps have no target: the spot collapses to a point and the
+   ring comes off (a 0×0 box with a 2px ring would leave a dot mid-screen) */
+.tour-spot.bare { box-shadow: 0 0 0 9999px var(--tour-dim); }
+.tour-card {
+  position: fixed; width: 340px; max-width: calc(100vw - 20px);
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; box-shadow: var(--shadow);
+  padding: 16px 18px 14px;
+  transition: left .35s cubic-bezier(.4,0,.2,1), top .35s cubic-bezier(.4,0,.2,1);
+  animation: tour-in .25s ease;
+}
+@keyframes tour-in { from { opacity: 0; transform: translateY(6px); } }
+.tour-count {
+  font-size: 11px; font-weight: 600; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--ink-3); margin-bottom: 4px;
+}
+.tour-title { font-size: 16px; margin-bottom: 6px; padding-right: 20px; }
+.tour-body { font-size: 13px; color: var(--ink-2); line-height: 1.55; margin-bottom: 14px; }
+.tour-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.tour-dots { display: flex; gap: 5px; flex-wrap: wrap; }
+.tour-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--border); }
+.tour-dot.on { background: var(--accent); }
+.tour-btns { display: flex; gap: 8px; flex-shrink: 0; }
+.tour-btns .btn-primary, .tour-btns .btn-ghost { padding: 7px 14px; }
+.tour-skip {
+  position: absolute; top: 8px; right: 8px; padding: 4px 8px;
+  color: var(--ink-3); font-size: 13px; border-radius: 4px;
+}
+.tour-skip:hover { color: var(--ink); background: var(--surface-2); }

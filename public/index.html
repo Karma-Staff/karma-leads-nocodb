@@ -7,7 +7,7 @@
 <!-- geometric K, drawn rather than typeset, so it matches the mark in the app -->
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%232f54eb'/><path d='M11 7.5v17M11 16l9.5-8.5M11 16l9.5 8.5' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round' fill='none'/></svg>">
 <!-- bump ?v= whenever app.js/app.css change so no one gets a half-old app -->
-<link rel="stylesheet" href="app.css?v=34">
+<link rel="stylesheet" href="app.css?v=35">
 </head>
 <body>
 
@@ -44,6 +44,9 @@
       <input id="search" type="search" placeholder="Search leads" autocomplete="off">
     </div>
     <div class="topbar-right">
+      <!-- replays the guided tour; it also runs once by itself on a first visit -->
+      <button id="help-btn" class="btn-ghost btn-help"
+              title="Take the tour — a quick guide to everything here">?</button>
       <!-- label names the mode you'd switch to, so the button reads as an action -->
       <button id="theme-toggle" class="btn-ghost btn-theme" title="Switch theme">
         <span class="theme-ic-dark">Dark</span><span class="theme-ic-light">Light</span>
@@ -287,6 +290,6 @@
   </div>
 </div>
 
-<script src="app.js?v=32"></script>
+<script src="app.js?v=33"></script>
 </body>
 </html>

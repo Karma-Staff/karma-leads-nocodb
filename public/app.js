@@ -2851,6 +2851,215 @@ function wireSplitter() {
   handle.addEventListener("dblclick", () => setDetailWidth(460));  // reset
 }
 
+/* ---------------- tour ---------------- */
+/* A guided walkthrough: a spotlight glides between the app's controls with a
+   card explaining each one. Steps whose targets are hidden are skipped at
+   start, so one script serves both roles — the admin-only steps simply vanish
+   for a member. Runs once by itself on a first visit (kl_tour_done), and again
+   any time from the ? button in the top bar. Purely presentational: it never
+   clicks anything or touches S. */
+const TOUR_STEPS = [
+  { title: "Welcome to Karma Leads",
+    body: "The team's shared lead dashboard: every company, contact and job " +
+      "posting in one deduped place, so nobody works the same number twice. " +
+      "Here's a quick look around — it takes under a minute." },
+  { sel: ".searchbox", pos: "below", title: "Search",
+    body: "Type here to search the view you're in — company names, contacts, " +
+      "cities. It stacks with the filters below, so you can search inside " +
+      "any slice of the data." },
+  { sel: "#stats", pos: "below", title: "Work queues, not vanity numbers",
+    body: "Each tile is a button. Click “Ready to work” and the list filters " +
+      "to exactly the leads it counted — has a phone, never contacted. Click " +
+      "the armed tile again to clear it." },
+  { sel: '.nav-item[data-tab="companies"], .nav-item[data-tab="people"], ' +
+      '.nav-item[data-tab="jobs"], .nav-item[data-tab="recent"], ' +
+      '.nav-item[data-tab="favorites"]', pos: "right", title: "Views",
+    body: "Companies, People and the Job board are the three kinds of leads. " +
+      "Recent is your own trail — the last leads you touched — and Favorites " +
+      "holds the ones you star." },
+  { sel: '.nav-item[data-tab="stats"], .nav-item[data-tab="removed"]',
+    pos: "right", title: "Manage (admin)",
+    body: "Team activity is the whole team's action log. DNC is the " +
+      "do-not-call ban list — removing a lead bans its phone number and " +
+      "sweeps every lead that shares it." },
+  { sel: ".list-controls", pos: "below", title: "Sort & filter",
+    body: "Order the list, or narrow it by state or status. Filters stack " +
+      "with the search box and the tiles above." },
+  { sel: "#bulk-tools", pos: "below", title: "Bulk actions (admin)",
+    body: "Turn on Select and every row grows a checkbox. Assign, DNC or " +
+      "delete the whole selection at once — and it survives paging, so you " +
+      "can tick across pages." },
+  { sel: "#lead-list", pos: "right", title: "The lead list",
+    body: "Every lead in the current view. Click a row to read it on the " +
+      "right; the ▤ ▥ ▦ toggle in the header changes the row height." },
+  { sel: "#detail-pane", pos: "left", title: "The reading pane",
+    body: "The whole lead: contact details, status, owner, notes. Star it to " +
+      "favorite, set a status, assign an owner — or Remove it to ban the " +
+      "number (there's a 5-second undo). Drag the divider to resize." },
+  { sel: ".pager", pos: "above", title: "Paging",
+    body: "Move through big lists here, and choose how many rows you see " +
+      "per page." },
+  { sel: "#job-search-btn, #import-btn", pos: "right",
+    title: "Bringing leads in (admin)",
+    body: "Find jobs runs the job-board scraper — the ⚙ picks the board and " +
+      "the search. Import leads takes spreadsheet exports; imports never " +
+      "overwrite a filled field with a blank." },
+  { sel: "#theme-toggle", pos: "below", title: "Light or dark",
+    body: "Switch the theme any time — your choice is remembered on this " +
+      "browser." },
+  { sel: "#user-avatar", pos: "below", title: "Your account",
+    body: "Sign out here. Admins also find Manage team and the Trash — " +
+      "deleted leads wait there 30 days before purging, so a mistake is " +
+      "recoverable." },
+  { title: "That's the tour",
+    body: "You're all set. Replay this any time with the ? button in the " +
+      "top bar." },
+];
+
+let tour = null;   // {steps, i, root, spot, card} while one is running
+
+function tourTargets(step) {
+  if (!step.sel) return null;                       // centered welcome/finish
+  const els = [...document.querySelectorAll(step.sel)]
+    .filter((el) => el.offsetParent !== null);      // skip admin-only on members
+  return els.length ? els : null;
+}
+
+/* one box around every element the selector matched — that's how "Views"
+   rings five sidebar buttons at once */
+function tourBox(step) {
+  const els = tourTargets(step);
+  if (!els) return null;
+  return els.map((el) => el.getBoundingClientRect()).reduce((a, r) => ({
+    left: Math.min(a.left, r.left), top: Math.min(a.top, r.top),
+    right: Math.max(a.right, r.right), bottom: Math.max(a.bottom, r.bottom),
+  }), { left: Infinity, top: Infinity, right: -Infinity, bottom: -Infinity });
+}
+
+function placeTourCard(box, pos) {
+  const card = tour.card;
+  const m = 14, vw = innerWidth, vh = innerHeight;
+  const cw = card.offsetWidth, ch = card.offsetHeight;
+  let left, top;
+  if (!box) { left = (vw - cw) / 2; top = (vh - ch) / 2; }
+  else {
+    const room = {                       // px to spare on each side, can be <0
+      below: vh - box.bottom - m - ch,
+      above: box.top - m - ch,
+      right: vw - box.right - m - cw,
+      left: box.left - m - cw,
+    };
+    const order = pos ? [pos, "below", "above", "right", "left"]
+      : ["below", "above", "right", "left"];
+    const side = order.find((k) => room[k] > 0) || "below";
+    if (side === "below" || side === "above") {
+      left = (box.left + box.right) / 2 - cw / 2;
+      top = side === "below" ? box.bottom + m : box.top - m - ch;
+    } else {
+      top = (box.top + box.bottom) / 2 - ch / 2;
+      left = side === "right" ? box.right + m : box.left - m - cw;
+    }
+  }
+  card.style.left = Math.max(10, Math.min(left, vw - cw - 10)) + "px";
+  card.style.top = Math.max(10, Math.min(top, vh - ch - 10)) + "px";
+}
+
+function tourGo(i) {
+  if (!tour) return;
+  tour.i = Math.max(0, Math.min(i, tour.steps.length - 1));
+  const step = tour.steps[tour.i];
+  const last = tour.i === tour.steps.length - 1;
+  (tourTargets(step) || [])[0]?.scrollIntoView({ block: "nearest" });
+  const box = tourBox(step);
+  const { spot, root } = tour;
+  const pad = 6;
+  spot.classList.toggle("bare", !box);
+  if (box) {
+    spot.style.left = box.left - pad + "px";
+    spot.style.top = box.top - pad + "px";
+    spot.style.width = box.right - box.left + pad * 2 + "px";
+    spot.style.height = box.bottom - box.top + pad * 2 + "px";
+  } else {                       // no target: collapse to a mid-screen point
+    spot.style.left = innerWidth / 2 + "px";
+    spot.style.top = innerHeight / 2 + "px";
+    spot.style.width = "0px";
+    spot.style.height = "0px";
+  }
+  root.querySelector(".tour-count").textContent =
+    `Step ${tour.i + 1} of ${tour.steps.length}`;
+  root.querySelector(".tour-title").textContent = step.title;
+  root.querySelector(".tour-body").textContent = step.body;
+  root.querySelectorAll(".tour-dot").forEach((d, n) =>
+    d.classList.toggle("on", n === tour.i));
+  root.querySelector(".tour-back").style.visibility =
+    tour.i === 0 ? "hidden" : "visible";
+  root.querySelector(".tour-next").textContent =
+    last ? "Finish" : tour.i === 0 ? "Show me around" : "Next";
+  placeTourCard(box, step.pos);          // content is set, so the size is real
+}
+
+function tourNext() {
+  if (tour.i >= tour.steps.length - 1) endTour();
+  else tourGo(tour.i + 1);
+}
+
+function tourReflow() { if (tour) tourGo(tour.i); }
+
+function tourKeys(e) {
+  if (!tour) return;
+  if (e.key === "Escape") endTour();
+  else if (e.key === "ArrowRight" || e.key === "Enter") tourNext();
+  else if (e.key === "ArrowLeft") tourGo(tour.i - 1);
+  else return;
+  e.preventDefault();
+  e.stopPropagation();       // capture phase — the app never sees these keys
+}
+
+function endTour() {
+  if (!tour) return;
+  // any exit counts as "seen" — the tour must never nag a returning user
+  localStorage.setItem("kl_tour_done", "1");
+  document.removeEventListener("keydown", tourKeys, true);
+  removeEventListener("resize", tourReflow);
+  tour.root.remove();
+  tour = null;
+}
+
+function startTour() {
+  if (tour) return;
+  const steps = TOUR_STEPS.filter((s) => !s.sel || tourTargets(s));
+  const root = document.createElement("div");
+  root.className = "tour";
+  root.innerHTML = `
+    <div class="tour-spot"></div>
+    <div class="tour-card" role="dialog" aria-modal="true" aria-label="Guided tour">
+      <button class="tour-skip" title="End the tour (Esc)">✕ Skip</button>
+      <div class="tour-count"></div>
+      <h3 class="tour-title"></h3>
+      <p class="tour-body"></p>
+      <div class="tour-foot">
+        <div class="tour-dots">${steps.map(() => '<i class="tour-dot"></i>').join("")}</div>
+        <div class="tour-btns">
+          <button class="btn-ghost tour-back">Back</button>
+          <button class="btn-primary tour-next">Next</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(root);
+  tour = { steps, i: 0, root,
+    spot: root.querySelector(".tour-spot"),
+    card: root.querySelector(".tour-card") };
+  root.querySelector(".tour-skip").addEventListener("click", endTour);
+  root.querySelector(".tour-back").addEventListener("click", () => tourGo(tour.i - 1));
+  root.querySelector(".tour-next").addEventListener("click", tourNext);
+  // the spotlight ignores pointer events, so a click anywhere on the dimmed
+  // page lands on the root — advance, like flipping a page
+  root.addEventListener("click", (e) => { if (e.target === root) tourNext(); });
+  document.addEventListener("keydown", tourKeys, true);
+  addEventListener("resize", tourReflow);
+  tourGo(0);
+}
+
 /* One stale cached file used to blank the whole app: a missing element threw
    out of wire(), init() stopped, and nothing was ever shown. Wiring is
    best-effort now — a mismatched control goes dead, the app still loads. */
@@ -2898,6 +3107,7 @@ function wire() {
     document.documentElement.dataset.theme = dark ? "dark" : "";
     localStorage.setItem("kl_theme", dark ? "dark" : "");
   });
+  on("help-btn", "click", startTour);
   on("user-avatar", "click", (e) => {
     e.stopPropagation();
     $("user-dropdown").classList.toggle("hidden");
@@ -2976,6 +3186,9 @@ async function boot() {
     select({ Id: +dl.open, _t: dl.tab });
   }
   refreshCounts();
+  // first visit on this browser: walk the newcomer around, once the list has
+  // had a beat to paint — any exit sets kl_tour_done, so it never nags
+  if (!localStorage.getItem("kl_tour_done")) setTimeout(startTour, 800);
   S.booted = true;             // from here on, a 401 means the session died
 }
 
